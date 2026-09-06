@@ -18,6 +18,7 @@ from langchain_community.utilities.sql_database import SQLDatabase
 
 from core.config import settings
 from core.llm import get_llm_by_provider
+from core.metrics import get_metrics_text
 from schemas.agent_io import AgentQuestion, AgentResult
 from tools.database import get_engine
 from tools.sql_executor import execute_sql
@@ -34,11 +35,23 @@ class Text2SQLAgent:
         )
         # 官方高层 Agent：自动循环调用工具、生成 SQL、查询数据库
         # return_intermediate_steps=True 可以让我们拿到 Agent 实际执行过的工具动作
+        prefix = (
+            "你是一个企业数据底座智能问析 SQL Agent。"
+            "请根据业务问题自动查询数据库，并使用中文回答用户。\n\n"
+            "可参考的业务指标口径如下：\n"
+            f"{get_metrics_text()}\n\n"
+            "注意事项：\n"
+            "1. 只能使用数据库中实际存在的表和字段。\n"
+            "2. 涉及指标分析时，请优先参考上述业务指标口径。\n"
+            "3. 所有 SQL 必须是只读 SELECT 查询。\n"
+            "4. 最终回答请使用中文。"
+        )
         self.agent = create_sql_agent(
             llm=self.llm,
             db=self.db,
             agent_type="tool-calling",
             verbose=True,
+            prefix=prefix,
             agent_executor_kwargs={"return_intermediate_steps": True},
         )
 
