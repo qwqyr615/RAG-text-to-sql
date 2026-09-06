@@ -15,6 +15,8 @@
 
 from sqlalchemy import text
 
+from knowledge.knowledge_service import export_knowledge_json
+from metadata.metadata_service import export_metadata_json
 from tools.database import get_engine
 
 SOURCE_TABLE = "intelligent_production_iiot"
@@ -106,6 +108,12 @@ def main() -> None:
 
     print("多表预置底座初始化完成。")
     print("tables: dim_line, dim_machine, dim_product, dim_batch, fact_production_record")
+
+    # 初始化完成后自动刷新 output JSON，供前端/接口/Agent 上下文使用
+    metadata_path = export_metadata_json()
+    knowledge_path = export_knowledge_json()
+    print(f"metadata JSON: {metadata_path}")
+    print(f"knowledge JSON: {knowledge_path}")
 
 
 if __name__ == "__main__":
