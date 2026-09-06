@@ -20,6 +20,7 @@ from agents.report_agent import ReportGenerator
 from core.config import settings
 from core.llm import get_llm_by_provider
 from core.metrics import get_metrics_text
+from core.prompts import SQL_AGENT_PREFIX
 from schemas.agent_io import AgentQuestion, AgentResult
 from tools.database import get_engine
 from tools.sql_executor import execute_sql
@@ -36,16 +37,9 @@ class Text2SQLAgent:
         )
         # 官方高层 Agent：自动循环调用工具、生成 SQL、查询数据库
         # return_intermediate_steps=True 可以让我们拿到 Agent 实际执行过的工具动作
-        prefix = (
-            "你是一个企业数据底座智能问析 SQL Agent。"
-            "请根据业务问题自动查询数据库，并使用中文回答用户。\n\n"
-            "可参考的业务指标口径如下：\n"
-            f"{get_metrics_text()}\n\n"
-            "注意事项：\n"
-            "1. 只能使用数据库中实际存在的表和字段。\n"
-            "2. 涉及指标分析时，请优先参考上述业务指标口径。\n"
-            "3. 所有 SQL 必须是只读 SELECT 查询。\n"
-            "4. 最终回答请使用中文。"
+        prefix = SQL_AGENT_PREFIX.format(
+            metrics=get_metrics_text(),
+            business_rules="暂无自定义业务规则，默认参考上述指标口径",
         )
         self.agent = create_sql_agent(
             llm=self.llm,
@@ -100,8 +94,20 @@ class Text2SQLAgent:
 
         result = AgentResult(question=question.question)
 
+        # 把可选的 metadata / business_rules 补充到当次问题中，
+        # 这样既能使用官方 SQL Agent 自动读取表结构，也能额外传入业务上下文。
+        extra_context = []
+        if question.metadata:
+            extra_context.append(f"补充数据资源说明：\n{question.metadata}")
+        if question.business_rules:
+            extra_context.append(f"本次业务规则/口径：\n{question.business_rules}")
+
+        user_input = question.question
+        if extra_context:
+            user_input += "\n\n" + "\n\n".join(extra_context)
+
         try:
-            response = self.agent.invoke({"input": question.question})
+            response = self.agent.invoke({"input": user_input})
 
             if isinstance(response, dict):
                 result.analysis_text = response.get("output", "") or "Agent 未返回分析结果。"
