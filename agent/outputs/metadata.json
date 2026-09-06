@@ -1,0 +1,685 @@
+{
+  "schema_version": "1.0",
+  "database_type": "mysql",
+  "tables": [
+    {
+      "table_name": "dim_line",
+      "description": "生产线维度表，记录企业生产线编码。",
+      "columns": [
+        {
+          "name": "line_id",
+          "type": "VARCHAR(100)",
+          "nullable": false,
+          "default": null,
+          "primary_key": true,
+          "description": "生产线编码，例如 Line_A。",
+          "sample_value": "Line_A"
+        },
+        {
+          "name": "description",
+          "type": "VARCHAR(255)",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "生产线说明。",
+          "sample_value": null
+        }
+      ],
+      "sample_rows": [
+        {
+          "line_id": "Line_A",
+          "description": null
+        },
+        {
+          "line_id": "Line_B",
+          "description": null
+        }
+      ],
+      "row_count": 5
+    },
+    {
+      "table_name": "dim_machine",
+      "description": "设备维度表，记录设备编码及其所属生产线。",
+      "columns": [
+        {
+          "name": "machine_id",
+          "type": "VARCHAR(100)",
+          "nullable": false,
+          "default": null,
+          "primary_key": true,
+          "description": "设备编码，例如 M01。",
+          "sample_value": "M01"
+        },
+        {
+          "name": "line_id",
+          "type": "VARCHAR(100)",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "设备所属生产线编码，关联 dim_line.line_id。",
+          "sample_value": "Line_C"
+        }
+      ],
+      "sample_rows": [
+        {
+          "machine_id": "M01",
+          "line_id": "Line_C"
+        },
+        {
+          "machine_id": "M02",
+          "line_id": "Line_E"
+        }
+      ],
+      "row_count": 20
+    },
+    {
+      "table_name": "dim_product",
+      "description": "产品维度表，记录产品类型/产品编码。",
+      "columns": [
+        {
+          "name": "product_type",
+          "type": "VARCHAR(100)",
+          "nullable": false,
+          "default": null,
+          "primary_key": true,
+          "description": "产品类型编码，例如 Product_A。",
+          "sample_value": "Product_A"
+        },
+        {
+          "name": "product_name",
+          "type": "VARCHAR(255)",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "产品名称。",
+          "sample_value": null
+        }
+      ],
+      "sample_rows": [
+        {
+          "product_type": "Product_A",
+          "product_name": null
+        },
+        {
+          "product_type": "Product_B",
+          "product_name": null
+        }
+      ],
+      "row_count": 4
+    },
+    {
+      "table_name": "dim_batch",
+      "description": "批次维度表，记录生产批次编码。",
+      "columns": [
+        {
+          "name": "batch_id",
+          "type": "VARCHAR(100)",
+          "nullable": false,
+          "default": null,
+          "primary_key": true,
+          "description": "生产批次编码，例如 B0001。",
+          "sample_value": "B0001"
+        }
+      ],
+      "sample_rows": [
+        {
+          "batch_id": "B0001"
+        },
+        {
+          "batch_id": "B0002"
+        }
+      ],
+      "row_count": 1000
+    },
+    {
+      "table_name": "fact_production_record",
+      "description": "生产记录事实表，记录每次生产运行的环境、质量、设备、产量等指标。",
+      "columns": [
+        {
+          "name": "record_id",
+          "type": "INTEGER",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "生产记录主键。",
+          "sample_value": 1
+        },
+        {
+          "name": "machine_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "设备编码，关联 dim_machine.machine_id。",
+          "sample_value": "M07"
+        },
+        {
+          "name": "production_line",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "生产线编码，关联 dim_line.line_id。",
+          "sample_value": "Line_A"
+        },
+        {
+          "name": "batch_id",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "生产批次编码，关联 dim_batch.batch_id。",
+          "sample_value": "B0343"
+        },
+        {
+          "name": "shift",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "班次，例如 Morning / Afternoon / Night。",
+          "sample_value": "Morning"
+        },
+        {
+          "name": "product_type",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "产品类型，关联 dim_product.product_type。",
+          "sample_value": "Product_C"
+        },
+        {
+          "name": "ambient_temperature",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": 24.6579352875236
+        },
+        {
+          "name": "humidity",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": 69.27203719832515
+        },
+        {
+          "name": "air_pressure",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": 102.33567894535514
+        },
+        {
+          "name": "ambient_vibration",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": 0.36619022987383515
+        },
+        {
+          "name": "motor_temperature",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "电机温度。",
+          "sample_value": 52.965525723980384
+        },
+        {
+          "name": "spindle_speed",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": 3076.599085939756
+        },
+        {
+          "name": "motor_current",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": null
+        },
+        {
+          "name": "torque",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": 47.09804259885543
+        },
+        {
+          "name": "vibration",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "振动值。",
+          "sample_value": 0.9998849693541386
+        },
+        {
+          "name": "acoustic_level",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": 74.6449490629851
+        },
+        {
+          "name": "bearing_temperature",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": 72.15440556374456
+        },
+        {
+          "name": "process_temperature",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": 72.69581669119908
+        },
+        {
+          "name": "hydraulic_pressure",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": 147.1358069706795
+        },
+        {
+          "name": "flow_rate",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": 69.30262650206201
+        },
+        {
+          "name": "coolant_temperature",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": 22.568324350268583
+        },
+        {
+          "name": "material_feed_rate",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": 94.06398798795873
+        },
+        {
+          "name": "feed_pressure",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": 82.12163537276754
+        },
+        {
+          "name": "cycle_time",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": 34.807159820157516
+        },
+        {
+          "name": "throughput_rate",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": 113.73475682366464
+        },
+        {
+          "name": "production_volume",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "产量。",
+          "sample_value": 125.27099351332727
+        },
+        {
+          "name": "machine_utilization",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "设备利用率。",
+          "sample_value": 78.89053393612096
+        },
+        {
+          "name": "resource_utilization",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": 92.70791546268171
+        },
+        {
+          "name": "operator_load",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": 56.732791577522995
+        },
+        {
+          "name": "power_consumption",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "能耗。",
+          "sample_value": 20.15661849266773
+        },
+        {
+          "name": "energy_per_unit",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": 15.912525633987538
+        },
+        {
+          "name": "defect_rate",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "缺陷率，数值越高质量越差。",
+          "sample_value": 2.7556942401127653
+        },
+        {
+          "name": "quality_score",
+          "type": "DOUBLE",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "质量得分，数值越高质量越好。",
+          "sample_value": 91.89075305875755
+        },
+        {
+          "name": "first_pass_yield",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "良率/直通率，数值越高越好。",
+          "sample_value": "94.70271878874419"
+        },
+        {
+          "name": "fault_event_count",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "故障事件次数。",
+          "sample_value": "2"
+        },
+        {
+          "name": "downtime_minutes",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "停机时长，单位分钟。",
+          "sample_value": "25.08105870816925"
+        },
+        {
+          "name": "maintenance_frequency",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": "2.1720292938655783"
+        },
+        {
+          "name": "production_cost_per_unit",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": "8.028928385891982"
+        },
+        {
+          "name": "resource_efficiency",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": "99.0"
+        },
+        {
+          "name": "production_efficiency",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": "99.0"
+        },
+        {
+          "name": "energy_saving_pct",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": "9.364688024122037"
+        },
+        {
+          "name": "downtime_reduction_pct",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": "49.35314799012221"
+        },
+        {
+          "name": "cost_reduction_pct",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": "26.199425279679474"
+        },
+        {
+          "name": "benefit_score",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": "68.2602353159878"
+        },
+        {
+          "name": "operation_mode",
+          "type": "TEXT",
+          "nullable": true,
+          "default": null,
+          "primary_key": false,
+          "description": "",
+          "sample_value": "High_Throughput"
+        }
+      ],
+      "sample_rows": [
+        {
+          "record_id": 1,
+          "machine_id": "M07",
+          "production_line": "Line_A",
+          "batch_id": "B0343",
+          "shift": "Morning",
+          "product_type": "Product_C",
+          "ambient_temperature": 24.6579352875236,
+          "humidity": 69.27203719832515,
+          "air_pressure": 102.33567894535514,
+          "ambient_vibration": 0.36619022987383515,
+          "motor_temperature": 52.965525723980384,
+          "spindle_speed": 3076.599085939756,
+          "motor_current": null,
+          "torque": 47.09804259885543,
+          "vibration": 0.9998849693541386,
+          "acoustic_level": 74.6449490629851,
+          "bearing_temperature": 72.15440556374456,
+          "process_temperature": 72.69581669119908,
+          "hydraulic_pressure": 147.1358069706795,
+          "flow_rate": 69.30262650206201,
+          "coolant_temperature": 22.568324350268583,
+          "material_feed_rate": 94.06398798795873,
+          "feed_pressure": 82.12163537276754,
+          "cycle_time": 34.807159820157516,
+          "throughput_rate": 113.73475682366464,
+          "production_volume": 125.27099351332727,
+          "machine_utilization": 78.89053393612096,
+          "resource_utilization": 92.70791546268171,
+          "operator_load": 56.732791577522995,
+          "power_consumption": 20.15661849266773,
+          "energy_per_unit": 15.912525633987538,
+          "defect_rate": 2.7556942401127653,
+          "quality_score": 91.89075305875755,
+          "first_pass_yield": "94.70271878874419",
+          "fault_event_count": "2",
+          "downtime_minutes": "25.08105870816925",
+          "maintenance_frequency": "2.1720292938655783",
+          "production_cost_per_unit": "8.028928385891982",
+          "resource_efficiency": "99.0",
+          "production_efficiency": "99.0",
+          "energy_saving_pct": "9.364688024122037",
+          "downtime_reduction_pct": "49.35314799012221",
+          "cost_reduction_pct": "26.199425279679474",
+          "benefit_score": "68.2602353159878",
+          "operation_mode": "High_Throughput"
+        },
+        {
+          "record_id": 2,
+          "machine_id": "M20",
+          "production_line": "Line_E",
+          "batch_id": "B0593",
+          "shift": "Afternoon",
+          "product_type": "Product_D",
+          "ambient_temperature": 15.953337095399215,
+          "humidity": 59.927354321838,
+          "air_pressure": 100.05531674232374,
+          "ambient_vibration": 0.4724101489945994,
+          "motor_temperature": 48.115477076758474,
+          "spindle_speed": 3145.358704053445,
+          "motor_current": 25.715030166312925,
+          "torque": 61.29610720201609,
+          "vibration": 1.3026270941342786,
+          "acoustic_level": 77.11664129655642,
+          "bearing_temperature": 67.37492703748663,
+          "process_temperature": 67.69728899953732,
+          "hydraulic_pressure": 169.50406406223314,
+          "flow_rate": 72.20885687646978,
+          "coolant_temperature": 20.04663442948082,
+          "material_feed_rate": 87.69276197435964,
+          "feed_pressure": 74.18463350358421,
+          "cycle_time": 28.097116405391795,
+          "throughput_rate": 121.21480076248763,
+          "production_volume": 104.79168103198677,
+          "machine_utilization": 70.9634137530639,
+          "resource_utilization": 84.84636670530342,
+          "operator_load": 57.412391385627195,
+          "power_consumption": 20.97803855989113,
+          "energy_per_unit": 19.945721124212007,
+          "defect_rate": 3.0028709752818115,
+          "quality_score": 92.52660349801491,
+          "first_pass_yield": "93.9330119508968",
+          "fault_event_count": "2",
+          "downtime_minutes": "20.400191292334764",
+          "maintenance_frequency": "2.576074076915424",
+          "production_cost_per_unit": "8.537013410340867",
+          "resource_efficiency": "99.0",
+          "production_efficiency": "99.0",
+          "energy_saving_pct": "3.129223468066911",
+          "downtime_reduction_pct": "56.43478386718356",
+          "cost_reduction_pct": "30.016525006789173",
+          "benefit_score": "68.49189114738584",
+          "operation_mode": "High_Throughput"
+        }
+      ],
+      "row_count": 15000
+    }
+  ],
+  "relationships": [
+    {
+      "source_table": "dim_machine",
+      "source_column": "line_id",
+      "target_table": "dim_line",
+      "target_column": "line_id",
+      "relation_type": "many-to-one",
+      "description": "多台设备属于同一条生产线。"
+    },
+    {
+      "source_table": "fact_production_record",
+      "source_column": "machine_id",
+      "target_table": "dim_machine",
+      "target_column": "machine_id",
+      "relation_type": "many-to-one",
+      "description": "多条生产记录对应同一台设备。"
+    },
+    {
+      "source_table": "fact_production_record",
+      "source_column": "production_line",
+      "target_table": "dim_line",
+      "target_column": "line_id",
+      "relation_type": "many-to-one",
+      "description": "多条生产记录来自同一条生产线。"
+    },
+    {
+      "source_table": "fact_production_record",
+      "source_column": "product_type",
+      "target_table": "dim_product",
+      "target_column": "product_type",
+      "relation_type": "many-to-one",
+      "description": "多条生产记录对应同一产品类型。"
+    },
+    {
+      "source_table": "fact_production_record",
+      "source_column": "batch_id",
+      "target_table": "dim_batch",
+      "target_column": "batch_id",
+      "relation_type": "many-to-one",
+      "description": "一条生产记录属于一个生产批次。"
+    }
+  ]
+}
