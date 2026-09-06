@@ -16,6 +16,7 @@ from typing import Any
 from langchain_community.agent_toolkits.sql.base import create_sql_agent
 from langchain_community.utilities.sql_database import SQLDatabase
 
+from agents.report_agent import ReportGenerator
 from core.config import settings
 from core.llm import get_llm_by_provider
 from core.metrics import get_metrics_text
@@ -116,5 +117,22 @@ class Text2SQLAgent:
         except Exception as exc:  # noqa: BLE001
             result.success = False
             result.error = str(exc)
+
+        return result
+
+    def ask_with_report(self, question: AgentQuestion | str) -> AgentResult:
+        """执行 SQL 查询后自动生成 Markdown 分析报告。"""
+        result = self.ask(question)
+        if not result.success:
+            return result
+
+        try:
+            generator = ReportGenerator(self.llm)
+            result.report = generator.generate(result)
+        except Exception as exc:  # noqa: BLE001
+            result.report = (
+                f"报告生成失败：{exc}\n\n"
+                f"以下为基础分析结论：\n{result.analysis_text}"
+            )
 
         return result

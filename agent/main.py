@@ -19,6 +19,11 @@ def print_result(result) -> None:
 
     print(f"文字结论：\n{result.analysis_text}\n")
 
+    if result.report:
+        print("===== 分析报告 =====")
+        print(result.report)
+        print()
+
     if result.sql:
         print("===== 生成的 SQL =====")
         print(result.sql)
@@ -51,7 +56,10 @@ def main() -> None:
             print("退出")
             break
 
-        result = agent.ask(AgentQuestion(question=question))
+        if "报告" in question:
+            result = agent.ask_with_report(AgentQuestion(question=question))
+        else:
+            result = agent.ask(AgentQuestion(question=question))
         print_result(result)
 
 

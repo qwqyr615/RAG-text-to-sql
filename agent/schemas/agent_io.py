@@ -23,5 +23,6 @@ class AgentResult(BaseModel):
     rows: list[list[Any]] = Field(default_factory=list, description="结果数据")
     chart_config: Optional[dict[str, Any]] = Field(default=None, description="图表配置")
     analysis_text: str = Field(default="", description="文字分析结论")
+    report: Optional[str] = Field(default=None, description="生成的 Markdown 分析报告")
     error: Optional[str] = Field(default=None, description="错误信息")
     success: bool = Field(default=True, description="是否成功")
