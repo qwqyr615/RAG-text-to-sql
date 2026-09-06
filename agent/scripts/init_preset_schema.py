@@ -45,8 +45,9 @@ SCHEMA_STATEMENTS = [
         batch_id VARCHAR(100) PRIMARY KEY
     )
     """,
+    "DROP TABLE IF EXISTS fact_production_record",
     f"""
-    CREATE TABLE IF NOT EXISTS fact_production_record LIKE {SOURCE_TABLE}
+    CREATE TABLE fact_production_record LIKE {SOURCE_TABLE}
     """,
 ]
 
