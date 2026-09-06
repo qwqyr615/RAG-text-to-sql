@@ -15,6 +15,7 @@ from typing import Any
 
 from langchain_community.agent_toolkits.sql.base import create_sql_agent
 from langchain_community.utilities.sql_database import SQLDatabase
+from sqlalchemy import inspect
 
 from agents.report_agent import ReportGenerator
 from core.config import settings
@@ -37,8 +38,9 @@ class Text2SQLAgent:
         )
         # 官方高层 Agent：自动循环调用工具、生成 SQL、查询数据库
         # return_intermediate_steps=True 可以让我们拿到 Agent 实际执行过的工具动作
+        available_columns = self._get_available_columns()
         prefix = SQL_AGENT_PREFIX.format(
-            metrics=get_metrics_text(),
+            metrics=get_metrics_text(available_columns or None),
             business_rules="暂无自定义业务规则，默认参考上述指标口径",
         )
         self.agent = create_sql_agent(
@@ -49,6 +51,21 @@ class Text2SQLAgent:
             prefix=prefix,
             agent_executor_kwargs={"return_intermediate_steps": True},
         )
+
+    @staticmethod
+    def _get_available_columns() -> list[str]:
+        """获取当前数据库中的所有可用字段名，用于动态匹配业务指标。"""
+        columns: list[str] = []
+        try:
+            inspector = inspect(get_engine())
+            for table_name in inspector.get_table_names():
+                columns.extend(
+                    col["name"] for col in inspector.get_columns(table_name)
+                )
+        except Exception:
+            # 如果无法读取元数据，降级为不传字段，由 SQL Agent 自行读取表结构
+            pass
+        return columns
 
     @staticmethod
     def _extract_sql_from_steps(intermediate_steps: list[Any] | None) -> str:
