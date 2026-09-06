@@ -68,13 +68,23 @@ D:\Anaconda\envs\sqllangchain\python.exe main.py
 - Agent 的循环、工具选择、SQL 生成、执行、错误重试由 LangChain 框架完成
 - 业务代码不手动实现复杂 Agent 逻辑
 - 返回结构化结果：`SQL`、`columns` 列名、`rows` 数据行、`analysis_text` 文字结论
+- 已增加业务指标口径：缺陷率、良率/直通率、质量得分、停机时长、故障次数、产量
+- 已增加 Markdown 报告生成功能
+- 已增加 Isolation Forest 异常检测
+- 已增加 LinearRegression 简单回归建模
+
+## 本地验证示例
+
+```text
+统计不同生产线的平均缺陷率
+找出异常数据
+用回归模型预测缺陷率
+生成一份质量分析报告
+```
 
 ## 下一步计划
 
-- [ ] 加载项目根目录 `data/Intelligent_Production_IIoT.csv` 到数据库
-- [ ] 补充表结构、字段说明、样例值元数据
-- [ ] 补充业务指标口径，例如良率、不良率、停机时长
-- [ ] 优化 Text-to-SQL Prompt
+- [ ] 将建模/报告结果通过 FastAPI 暴露给 Java/前端
+- [ ] 增加图表自动生成
 - [ ] 增加结果自动纠错
-- [ ] 增加图表生成
-- [ ] 增加 Python 代码执行和建模能力
+- [ ] 增加更多机器学习模型，例如 KMeans、决策树、随机森林

@@ -1,13 +1,20 @@
 """Agent 本地验证入口。
 
+支持：
+- 普通自然语言 SQL 查询/统计分析：Text2SQLAgent
+- 包含“报告”的问题：自动生成 Markdown 报告
+- 包含“异常/离群”的问题：Isolation Forest 异常检测
+- 包含“预测/回归”的问题：LinearRegression 简单回归建模
+
 使用方式：
     1. 在 agent 目录下创建 .env（参考 .env.example），填入大模型配置。
     2. 运行：python main.py
-    3. 输入自然语言问题，例如：统计不同生产线的平均缺陷率
+    3. 输入自然语言问题
 """
 
 from agents.text2sql_agent import Text2SQLAgent
 from schemas.agent_io import AgentQuestion
+from tools.modeling import run_anomaly_detection, run_linear_regression
 
 
 def print_result(result) -> None:
@@ -38,6 +45,25 @@ def print_result(result) -> None:
             print(f"... 共 {len(result.rows)} 行，仅展示前 20 行")
 
 
+def print_model_result(res: dict) -> None:
+    print("\n===== 分析结果 =====")
+    for key, value in res.items():
+        if key == "records":
+            print(f"{key}:")
+            for record in value[:10]:
+                print(record)
+        elif key == "sample_predictions":
+            print(f"{key}:")
+            for record in value[:10]:
+                print(record)
+        elif key == "coefficients":
+            print("coefficients:")
+            for feat, coef in value.items():
+                print(f"  {feat}: {coef}")
+        else:
+            print(f"{key}: {value}")
+
+
 def main() -> None:
     agent = Text2SQLAgent()
     print("企业数据底座智能问析 Agent 已启动。")
@@ -56,11 +82,25 @@ def main() -> None:
             print("退出")
             break
 
-        if "报告" in question:
-            result = agent.ask_with_report(AgentQuestion(question=question))
-        else:
-            result = agent.ask(AgentQuestion(question=question))
-        print_result(result)
+        try:
+            if "报告" in question:
+                result = agent.ask_with_report(AgentQuestion(question=question))
+                print_result(result)
+            elif "异常" in question or "离群" in question or "outlier" in question.lower():
+                print_model_result(run_anomaly_detection())
+            elif "回归" in question or "预测" in question:
+                if "质量" in question:
+                    target = "quality_score"
+                elif "停机" in question:
+                    target = "downtime_minutes"
+                else:
+                    target = "defect_rate"
+                print_model_result(run_linear_regression(target=target))
+            else:
+                result = agent.ask(AgentQuestion(question=question))
+                print_result(result)
+        except Exception as exc:
+            print(f"错误: {exc}")
 
 
 if __name__ == "__main__":
