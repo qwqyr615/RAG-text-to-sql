@@ -28,18 +28,19 @@ agent/
 
 ## 快速开始
 
+本项目本地使用 Python 虚拟环境：`sqllangchain`
+
 ```bash
 cd agent
 
-# 1. 安装依赖
-pip install -r requirements.txt
+# 1. 使用已配置好的环境安装/确认依赖
+D:\Anaconda\envs\sqllangchain\python.exe -m pip install -r requirements.txt
 
-# 2. 创建本地配置
-cp .env.example .env
-# 然后编辑 .env，填入 DEEPSEEK_API_KEY
+# 2. 配置 .env
+# 已有真实配置时直接检查 DEEPSEEK_API_KEY 和 DATABASE_URL
 
 # 3. 启动命令行验证
-python main.py
+D:\Anaconda\envs\sqllangchain\python.exe main.py
 ```
 
 ## 配置说明
@@ -66,6 +67,7 @@ python main.py
 - 使用 LangChain 官方 `create_sql_agent` 构建 SQL Agent
 - Agent 的循环、工具选择、SQL 生成、执行、错误重试由 LangChain 框架完成
 - 业务代码不手动实现复杂 Agent 逻辑
+- 返回结构化结果：`SQL`、`columns` 列名、`rows` 数据行、`analysis_text` 文字结论
 
 ## 下一步计划
 

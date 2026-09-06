@@ -21,8 +21,8 @@ def validate_readonly_sql(sql: str) -> str:
     normalized = normalized.strip().rstrip(";").strip()
 
     first_keyword = normalized.split(maxsplit=1)[0].upper() if normalized else ""
-    if first_keyword != "SELECT":
-        raise ValueError("仅允许执行 SELECT 查询")
+    if first_keyword not in {"SELECT", "WITH"}:
+        raise ValueError("仅允许执行 SELECT 或只读 WITH 查询")
 
     dangerous = re.findall(
         r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE)\b",

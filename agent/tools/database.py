@@ -11,7 +11,6 @@ from core.config import settings
 
 _engine: Engine | None = None
 
-
 def get_engine() -> Engine:
     """获取全局 SQLAlchemy Engine（懒加载）。"""
     global _engine

@@ -5,7 +5,13 @@
 
 由 LangChain 自己完成：工具选择、SQL 生成、执行、错误重试、Agent 循环。
 这里不手动实现复杂 Agent 内容。
+
+为了向前端/上层返回结构化结果，本模块会从 Agent 的中间步骤中提取实际执行的 SQL，
+并使用只读执行器获取列名和数据行。
 """
+
+import json
+from typing import Any
 
 from langchain_community.agent_toolkits.sql.base import create_sql_agent
 from langchain_community.utilities.sql_database import SQLDatabase
@@ -14,6 +20,7 @@ from core.config import settings
 from core.llm import get_llm_by_provider
 from schemas.agent_io import AgentQuestion, AgentResult
 from tools.database import get_engine
+from tools.sql_executor import execute_sql
 
 
 class Text2SQLAgent:
@@ -26,15 +33,54 @@ class Text2SQLAgent:
             sample_rows_in_table_info=settings.sql_sample_rows,
         )
         # 官方高层 Agent：自动循环调用工具、生成 SQL、查询数据库
+        # return_intermediate_steps=True 可以让我们拿到 Agent 实际执行过的工具动作
         self.agent = create_sql_agent(
             llm=self.llm,
             db=self.db,
             agent_type="tool-calling",
             verbose=True,
+            agent_executor_kwargs={"return_intermediate_steps": True},
         )
 
+    @staticmethod
+    def _extract_sql_from_steps(intermediate_steps: list[Any] | None) -> str:
+        """从 Agent 中间步骤中提取真正执行查询的 SQL。"""
+        if not intermediate_steps:
+            return ""
+
+        # 倒序查找最近一次真正的数据库查询动作
+        for action, _ in reversed(intermediate_steps):
+            tool_name = getattr(action, "tool", None)
+            if tool_name != "sql_db_query":
+                continue
+
+            tool_input = getattr(action, "tool_input", None)
+            sql = Text2SQLAgent._parse_tool_input(tool_input)
+            if sql:
+                return sql
+
+        return ""
+
+    @staticmethod
+    def _parse_tool_input(tool_input: Any) -> str:
+        """解析 sql_db_query 工具的入参，可能是 dict、JSON 字符串或普通字符串。"""
+        if isinstance(tool_input, dict):
+            return str(tool_input.get("query") or tool_input.get("sql") or "").strip()
+
+        if isinstance(tool_input, str):
+            text = tool_input.strip()
+            if text.startswith("{"):
+                try:
+                    data = json.loads(text)
+                    return str(data.get("query") or data.get("sql") or "").strip()
+                except json.JSONDecodeError:
+                    pass
+            return text
+
+        return str(tool_input or "").strip()
+
     def ask(self, question: AgentQuestion | str) -> AgentResult:
-        """把用户问题交给 LangChain SQL Agent 处理。"""
+        """把用户问题交给 LangChain SQL Agent 处理，并返回结构化结果。"""
         if isinstance(question, str):
             question = AgentQuestion(question=question)
 
@@ -42,8 +88,18 @@ class Text2SQLAgent:
 
         try:
             response = self.agent.invoke({"input": question.question})
-            output = response.get("output", "") if isinstance(response, dict) else str(response)
-            result.analysis_text = output or "Agent 未返回分析结果。"
+
+            if isinstance(response, dict):
+                result.analysis_text = response.get("output", "") or "Agent 未返回分析结果。"
+                sql = self._extract_sql_from_steps(response.get("intermediate_steps"))
+            else:
+                result.analysis_text = str(response)
+
+            if sql:
+                result.sql = sql
+                columns, rows = execute_sql(sql)
+                result.columns = columns
+                result.rows = rows
         except Exception as exc:  # noqa: BLE001
             result.success = False
             result.error = str(exc)
