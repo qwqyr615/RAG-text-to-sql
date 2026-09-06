@@ -17,7 +17,7 @@ from sklearn.model_selection import train_test_split
 
 from tools.database import get_engine
 
-TABLE_NAME = "intelligent_production_iiot"
+TABLE_NAME = "fact_production_record"
 
 DEFAULT_ANOMALY_FEATURES = [
     "defect_rate",

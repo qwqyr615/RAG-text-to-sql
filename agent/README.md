@@ -7,15 +7,28 @@
 ```text
 agent/
 ├── agents/                  # Agent 层：各类智能体
+│   ├── enterprise_agent.py  # 总 Agent：问题路由
 │   ├── text2sql_agent.py    # Text-to-SQL 核心 Agent
+│   └── report_agent.py      # 报告生成
 ├── core/                    # 核心配置与通用能力
 │   ├── config.py            # 从 .env 读取全局配置
+│   ├── metrics.py           # 业务指标口径
 │   ├── llm.py               # 大模型实例工厂
 │   └── prompts.py           # Prompt 统一管理
-├── tools/                   # 工具层：数据库、SQL 执行、元数据读取
+├── metadata/                # 数据资源理解
+│   ├── preset_metadata.py   # 预置表/字段/关系说明
+│   └── metadata_service.py  # 动态读取 MySQL 并输出 JSON
+├── knowledge/               # 知识模型与映射
+│   ├── knowledge_base.py    # 主题/对象/规则定义
+│   └── knowledge_service.py # 映射到真实表/字段
+├── tools/                   # 工具层
 │   ├── database.py          # 数据库连接
 │   ├── metadata.py          # 数据库元数据读取
+│   ├── modeling.py          # 异常检测/回归建模
 │   └── sql_executor.py      # 只读 SQL 执行器
+├── scripts/                 # 初始化脚本
+│   └── init_preset_schema.py
+├── outputs/                 # 导出的 JSON
 ├── schemas/                 # 输入输出数据结构
 ├── data/                    # 本地数据文件
 ├── logs/                    # 日志目录
@@ -72,6 +85,10 @@ D:\Anaconda\envs\sqllangchain\python.exe main.py
 - 已增加 Markdown 报告生成功能
 - 已增加 Isolation Forest 异常检测
 - 已增加 LinearRegression 简单回归建模
+- 已建立多表预置底座：`dim_line`、`dim_machine`、`dim_product`、`dim_batch`、`fact_production_record`
+- 已支持 metadata JSON 导出：`outputs/metadata.json`
+- 已支持知识模型映射 JSON 导出：`outputs/knowledge.json`
+- 已通过 `EnterpriseAgent` 统一路由：SQL/报告/异常检测/回归
 
 ## 本地验证示例
 
@@ -84,7 +101,7 @@ D:\Anaconda\envs\sqllangchain\python.exe main.py
 
 ## 下一步计划
 
-- [ ] 将建模/报告结果通过 FastAPI 暴露给 Java/前端
+- [ ] 实现 FastAPI 接口（metadata/knowledge/agent）
+- [ ] Java/前端接入
 - [ ] 增加图表自动生成
-- [ ] 增加结果自动纠错
 - [ ] 增加更多机器学习模型，例如 KMeans、决策树、随机森林

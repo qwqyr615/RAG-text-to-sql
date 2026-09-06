@@ -15,13 +15,14 @@ from typing import Any
 
 from langchain_community.agent_toolkits.sql.base import create_sql_agent
 from langchain_community.utilities.sql_database import SQLDatabase
-from sqlalchemy import inspect
 
 from agents.report_agent import ReportGenerator
 from core.config import settings
 from core.llm import get_llm_by_provider
 from core.metrics import get_metrics_text
 from core.prompts import SQL_AGENT_PREFIX
+from knowledge.knowledge_service import resolve_knowledge
+from metadata.metadata_service import get_metadata_json
 from schemas.agent_io import AgentQuestion, AgentResult
 from tools.database import get_engine
 from tools.sql_executor import execute_sql
@@ -32,14 +33,25 @@ class Text2SQLAgent:
 
     def __init__(self) -> None:
         self.llm = get_llm_by_provider()
+
+        # 先读取当前数据源元数据，动态限定 Agent 可使用的预置业务表
+        self.metadata_json = get_metadata_json()
+        business_tables = [table["table_name"] for table in self.metadata_json.get("tables", [])]
+
         self.db = SQLDatabase(
             engine=get_engine(),
+            include_tables=business_tables or None,
             sample_rows_in_table_info=settings.sql_sample_rows,
         )
+
+        available_columns = self._get_available_columns(self.metadata_json)
+        knowledge = resolve_knowledge(self.metadata_json)
+
         # 官方高层 Agent：自动循环调用工具、生成 SQL、查询数据库
         # return_intermediate_steps=True 可以让我们拿到 Agent 实际执行过的工具动作
-        available_columns = self._get_available_columns()
         prefix = SQL_AGENT_PREFIX.format(
+            data_resources=self._format_data_resources(self.metadata_json),
+            knowledge_summary=self._format_knowledge_summary(knowledge),
             metrics=get_metrics_text(available_columns or None),
             business_rules="暂无自定义业务规则，默认参考上述指标口径",
         )
@@ -53,19 +65,75 @@ class Text2SQLAgent:
         )
 
     @staticmethod
-    def _get_available_columns() -> list[str]:
-        """获取当前数据库中的所有可用字段名，用于动态匹配业务指标。"""
+    def _get_available_columns(metadata_json: dict[str, Any]) -> list[str]:
+        """从 metadata JSON 中获取当前业务表的所有可用字段名。"""
         columns: list[str] = []
-        try:
-            inspector = inspect(get_engine())
-            for table_name in inspector.get_table_names():
-                columns.extend(
-                    col["name"] for col in inspector.get_columns(table_name)
-                )
-        except Exception:
-            # 如果无法读取元数据，降级为不传字段，由 SQL Agent 自行读取表结构
-            pass
+        for table in metadata_json.get("tables", []):
+            columns.extend(column["name"] for column in table.get("columns", []))
         return columns
+
+    @staticmethod
+    def _format_data_resources(metadata_json: dict[str, Any]) -> str:
+        """把元数据 JSON 格式化成 Agent Prompt 可读的数据资源概览。"""
+        lines = []
+        for table in metadata_json.get("tables", []):
+            table_name = table["table_name"]
+            description = table.get("description", "")
+            lines.append(f"- {table_name}: {description}")
+            for column in table.get("columns", []):
+                col_desc = column.get("description", "")
+                sample = column.get("sample_value")
+                sample_text = f"，样例: {sample}" if sample is not None else ""
+                if col_desc:
+                    lines.append(f"  - {column['name']}: {col_desc}{sample_text}")
+                else:
+                    lines.append(f"  - {column['name']}: {column['type']}{sample_text}")
+
+        if metadata_json.get("relationships"):
+            lines.append("\n表间关系:")
+            for rel in metadata_json["relationships"]:
+                lines.append(
+                    f"- {rel['source_table']}.{rel['source_column']} "
+                    f"-> {rel['target_table']}.{rel['target_column']}"
+                    f" ({rel.get('relation_type', '')})"
+                )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_knowledge_summary(knowledge: dict[str, Any]) -> str:
+        """把知识模型格式化成 Agent Prompt 可读的摘要。"""
+        lines = []
+
+        themes = knowledge.get("themes", [])
+        if themes:
+            lines.append("分析主题:")
+            for theme in themes:
+                lines.append(
+                    f"- {theme['name']}: {theme.get('description', '')} "
+                    f"[相关表: {', '.join(theme.get('related_tables', [])) or '无'}]"
+                )
+
+        objects = knowledge.get("objects", [])
+        if objects:
+            lines.append("\n业务对象:")
+            for obj in objects:
+                lines.append(
+                    f"- {obj['name']}: 表 {obj.get('default_table', '')}, "
+                    f"字段 {obj.get('key_field', '')}"
+                )
+
+        rules = knowledge.get("rules", [])
+        if rules:
+            lines.append("\n指标/规则映射:")
+            for rule in rules:
+                mapped_field = rule.get("mapped_field")
+                if mapped_field:
+                    lines.append(
+                        f"- {rule['name']}: {rule.get('mapped_table', '')}."
+                        f"{mapped_field} -> {rule.get('resolved_calculation', '')}"
+                    )
+
+        return "\n".join(lines)
 
     @staticmethod
     def _extract_sql_from_steps(intermediate_steps: list[Any] | None) -> str:

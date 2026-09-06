@@ -12,9 +12,7 @@
     3. 输入自然语言问题
 """
 
-from agents.text2sql_agent import Text2SQLAgent
-from schemas.agent_io import AgentQuestion
-from tools.modeling import run_anomaly_detection, run_linear_regression
+from agents.enterprise_agent import EnterpriseAgent
 
 
 def print_result(result) -> None:
@@ -65,7 +63,7 @@ def print_model_result(res: dict) -> None:
 
 
 def main() -> None:
-    agent = Text2SQLAgent()
+    agent = EnterpriseAgent()
     print("企业数据底座智能问析 Agent 已启动。")
     print("输入 exit / quit 退出。")
 
@@ -82,25 +80,14 @@ def main() -> None:
             print("退出")
             break
 
-        try:
-            if "报告" in question:
-                result = agent.ask_with_report(AgentQuestion(question=question))
-                print_result(result)
-            elif "异常" in question or "离群" in question or "outlier" in question.lower():
-                print_model_result(run_anomaly_detection())
-            elif "回归" in question or "预测" in question:
-                if "质量" in question:
-                    target = "quality_score"
-                elif "停机" in question:
-                    target = "downtime_minutes"
-                else:
-                    target = "defect_rate"
-                print_model_result(run_linear_regression(target=target))
-            else:
-                result = agent.ask(AgentQuestion(question=question))
-                print_result(result)
-        except Exception as exc:
-            print(f"错误: {exc}")
+        response = agent.handle(question)
+
+        if response["type"] == "agent":
+            print_result(response["result"])
+        elif response["type"] == "model":
+            print_model_result(response["result"])
+        else:
+            print(f"错误: {response['result']}")
 
 
 if __name__ == "__main__":
