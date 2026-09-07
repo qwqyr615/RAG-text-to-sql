@@ -23,6 +23,7 @@ from core.metrics import get_metrics_text
 from core.prompts import SQL_AGENT_PREFIX
 from knowledge.knowledge_service import resolve_knowledge
 from metadata.metadata_service import get_metadata_json
+from metadata.prompt_formatter import format_data_resources
 from schemas.agent_io import AgentQuestion, AgentResult
 from tools.database import get_engine
 from tools.sql_executor import execute_sql
@@ -50,7 +51,7 @@ class Text2SQLAgent:
         # 官方高层 Agent：自动循环调用工具、生成 SQL、查询数据库
         # return_intermediate_steps=True 可以让我们拿到 Agent 实际执行过的工具动作
         prefix = SQL_AGENT_PREFIX.format(
-            data_resources=self._format_data_resources(self.metadata_json),
+            data_resources=format_data_resources(self.metadata_json),
             knowledge_summary=self._format_knowledge_summary(knowledge),
             metrics=get_metrics_text(available_columns or None),
             business_rules="暂无自定义业务规则，默认参考上述指标口径",
@@ -71,33 +72,6 @@ class Text2SQLAgent:
         for table in metadata_json.get("tables", []):
             columns.extend(column["name"] for column in table.get("columns", []))
         return columns
-
-    @staticmethod
-    def _format_data_resources(metadata_json: dict[str, Any]) -> str:
-        """把元数据 JSON 格式化成 Agent Prompt 可读的数据资源概览。"""
-        lines = []
-        for table in metadata_json.get("tables", []):
-            table_name = table["table_name"]
-            description = table.get("description", "")
-            lines.append(f"- {table_name}: {description}")
-            for column in table.get("columns", []):
-                col_desc = column.get("description", "")
-                sample = column.get("sample_value")
-                sample_text = f"，样例: {sample}" if sample is not None else ""
-                if col_desc:
-                    lines.append(f"  - {column['name']}: {col_desc}{sample_text}")
-                else:
-                    lines.append(f"  - {column['name']}: {column['type']}{sample_text}")
-
-        if metadata_json.get("relationships"):
-            lines.append("\n表间关系:")
-            for rel in metadata_json["relationships"]:
-                lines.append(
-                    f"- {rel['source_table']}.{rel['source_column']} "
-                    f"-> {rel['target_table']}.{rel['target_column']}"
-                    f" ({rel.get('relation_type', '')})"
-                )
-        return "\n".join(lines)
 
     @staticmethod
     def _format_knowledge_summary(knowledge: dict[str, Any]) -> str:

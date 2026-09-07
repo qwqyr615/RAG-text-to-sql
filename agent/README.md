@@ -17,13 +17,13 @@ agent/
 │   └── prompts.py           # Prompt 统一管理
 ├── metadata/                # 数据资源理解
 │   ├── preset_metadata.py   # 预置表/字段/关系说明
-│   └── metadata_service.py  # 动态读取 MySQL 并输出 JSON
+│   ├── metadata_service.py  # 动态读取 MySQL 并输出 JSON
+│   └── prompt_formatter.py  # metadata JSON → Agent Prompt 文本
 ├── knowledge/               # 知识模型与映射
 │   ├── knowledge_base.py    # 主题/对象/规则定义
 │   └── knowledge_service.py # 映射到真实表/字段
 ├── tools/                   # 工具层
 │   ├── database.py          # 数据库连接
-│   ├── metadata.py          # 数据库元数据读取
 │   ├── modeling.py          # 异常检测/回归建模
 │   └── sql_executor.py      # 只读 SQL 执行器
 ├── scripts/                 # 初始化脚本
