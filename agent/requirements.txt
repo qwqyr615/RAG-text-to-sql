@@ -129,8 +129,7 @@ psycopg-pool==3.3.0
 # RAG / 向量数据库 / 数据库连接
 # 作用：Milvus 向量库、PostgreSQL 检查点、SQL 数据源
 # =========================================================
- langchain-milvus==0.3.3
- pymilvus==2.6.12
+  pymilvus==2.6.12
  SQLAlchemy==2.0.48
 
 

@@ -25,6 +25,7 @@ from knowledge.knowledge_service import resolve_knowledge
 from metadata.metadata_service import get_metadata_json
 from metadata.prompt_formatter import format_data_resources
 from schemas.agent_io import AgentQuestion, AgentResult
+from rag.retriever import get_rag_context
 from tools.database import get_engine
 from tools.sql_executor import execute_sql
 
@@ -165,6 +166,10 @@ class Text2SQLAgent:
         if extra_context:
             user_input += "\n\n" + "\n\n".join(extra_context)
 
+        rag_context = get_rag_context(question.question)
+        if rag_context:
+            user_input += "\n\n参考相似问题与SQL示例：\n" + rag_context
+        result.rag_context = rag_context
         try:
             response = self.agent.invoke({"input": user_input})
 

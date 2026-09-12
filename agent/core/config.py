@@ -44,6 +44,16 @@ class Settings(BaseSettings):
     # ========== Tavily 搜索（可选）==========
     tavily_api_key: str = ""
 
+    # ========== SiliconFlow 嵌入模型配置 ==========
+    siliconflow_api_key: str = ""
+    siliconflow_base_url: str = "https://api.siliconflow.cn/v1"
+    siliconflow_embedding_model: str = "BAAI/bge-m3"
+
+    # ========== Milvus RAG 配置 ==========
+    milvus_uri: str = "http://localhost:19530"
+    milvus_db_name: str = "rag_dev"
+    milvus_collection_name: str = "doc"
+    rag_top_k: int = 3
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
         env_file_encoding="utf-8",

@@ -1,0 +1,95 @@
+"""问题-SQL 示例向量库。
+
+负责：
+- 从 JSON 加 Example 问答对
+- 调用 SiliconFlow 嵌入模型
+- 写入/检索 Milvus
+"""
+
+import json
+from pathlib import Path
+from typing import Any
+
+from core.config import BASE_DIR, settings
+from rag.embeddings import get_embedding_model
+from rag.milvus_store import (
+    PK_FIELD,
+    TEXT_FIELDS,
+    VECTOR_FIELD,
+    ensure_collection,
+    get_client,
+)
+
+EXAMPLE_FILE = BASE_DIR / "rag" / "examples" / "sql_examples.json"
+
+
+def load_examples() -> list[dict[str, Any]]:
+    """加载问题-SQL 示例。"""
+    if not EXAMPLE_FILE.exists():
+        return []
+    return json.loads(EXAMPLE_FILE.read_text(encoding="utf-8"))
+
+
+def ingest_sql_examples(drop_old: bool = True) -> int:
+    """把示例问题写入 Milvus。"""
+    examples = load_examples()
+    if not examples:
+        return 0
+
+    client = get_client()
+    try:
+        ensure_collection(client, drop_old=drop_old)
+
+        questions = [example["question"] for example in examples]
+        vectors = get_embedding_model().embed_documents(questions)
+
+        data = []
+        for example, vector in zip(examples, vectors):
+            data.append(
+                {
+                    PK_FIELD: example["id"],
+                    VECTOR_FIELD: vector,
+                    "question": example["question"],
+                    "sql": example["sql"],
+                    "metrics": "、".join(example.get("metrics", [])),
+                    "tables": "、".join(example.get("tables", [])),
+                    "description": example.get("description", ""),
+                }
+            )
+
+        client.insert(
+            collection_name=settings.milvus_collection_name,
+            data=data,
+        )
+        client.flush(settings.milvus_collection_name)
+        return len(data)
+    finally:
+        client.close()
+
+
+def search_sql_examples(question: str, k: int | None = None) -> list[dict[str, Any]]:
+    """检索与用户问题最相似的历史问题/SQL 示例。"""
+    client = get_client()
+    try:
+        if not client.has_collection(settings.milvus_collection_name):
+            return []
+
+        ensure_collection(client, drop_old=False)
+        query_vector = get_embedding_model().embed_query(question)
+        results = client.search(
+            collection_name=settings.milvus_collection_name,
+            data=[query_vector],
+            limit=k or settings.rag_top_k,
+            output_fields=TEXT_FIELDS,
+            search_params={"metric_type": "COSINE"},
+        )
+
+        examples: list[dict[str, Any]] = []
+        for hit in results[0]:
+            entity = hit.get("entity", {})
+            example = {field: entity.get(field, "") for field in TEXT_FIELDS}
+            example["score"] = hit.get("distance")
+            examples.append(example)
+        return examples
+    finally:
+        client.close()

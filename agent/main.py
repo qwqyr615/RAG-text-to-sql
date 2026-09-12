@@ -24,6 +24,11 @@ def print_result(result) -> None:
 
     print(f"文字结论：\n{result.analysis_text}\n")
 
+    if result.rag_context:
+        print("===== RAG 检索示例 =====")
+        print(result.rag_context)
+        print()
+
     if result.report:
         print("===== 分析报告 =====")
         print(result.report)

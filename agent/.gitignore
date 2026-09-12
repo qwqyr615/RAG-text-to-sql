@@ -21,3 +21,7 @@ logs/*
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# 本地 Milvus / Milvus Lite 测试数据，非正式 RAG 代码
+*.db/
+milvus/

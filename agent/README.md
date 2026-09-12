@@ -26,6 +26,12 @@ agent/
 │   ├── database.py          # 数据库连接
 │   ├── modeling.py          # 异常检测/回归建模
 │   └── sql_executor.py      # 只读 SQL 执行器
+├── rag/                     # RAG 检索
+│   ├── embeddings.py        # SiliconFlow 嵌入模型
+│   ├── milvus_store.py      # Milvus 连接与集合管理
+│   ├── sql_example_store.py # 示例导入/检索
+│   ├── retriever.py         # RAG 上下文格式化
+│   └── ingest_examples.py   # 导入问题-SQL示例
 ├── scripts/                 # 初始化脚本
 │   └── init_preset_schema.py
 ├── outputs/                 # 导出的 JSON
@@ -53,6 +59,16 @@ D:\Anaconda\envs\sqllangchain\python.exe -m pip install -r requirements.txt
 # 已有真实配置时直接检查 DEEPSEEK_API_KEY 和 DATABASE_URL
 
 # 3. 启动命令行验证
+D:\Anaconda\envs\sqllangchain\python.exe main.py
+```
+
+## RAG 检索
+
+在 SQL Agent 生成 SQL 前，先用 Milvus 检索相似问题-SQL 示例，并注入 Prompt。
+
+```powershell
+cd agent
+D:\Anaconda\envs\sqllangchain\python.exe -m rag.ingest_examples
 D:\Anaconda\envs\sqllangchain\python.exe main.py
 ```
 

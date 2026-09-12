@@ -1,0 +1,66 @@
+[
+  {
+    "id": "example_001",
+    "question": "统计不同生产线的平均缺陷率，并按缺陷率从高到低排序",
+    "sql": "SELECT l.line_id AS production_line, AVG(f.defect_rate) AS avg_defect_rate FROM fact_production_record f LEFT JOIN dim_line l ON f.production_line = l.line_id GROUP BY l.line_id ORDER BY avg_defect_rate DESC",
+    "metrics": ["缺陷率"],
+    "tables": ["fact_production_record", "dim_line"],
+    "description": "按生产线聚合平均缺陷率"
+  },
+  {
+    "id": "example_002",
+    "question": "统计各产品的平均良率",
+    "sql": "SELECT f.product_type, AVG(f.first_pass_yield) AS avg_yield FROM fact_production_record f GROUP BY f.product_type ORDER BY avg_yield DESC",
+    "metrics": ["良率"],
+    "tables": ["fact_production_record"],
+    "description": "按产品类型聚合平均良率"
+  },
+  {
+    "id": "example_003",
+    "question": "查询停机时长最长的设备",
+    "sql": "SELECT f.machine_id, SUM(f.downtime_minutes) AS total_downtime FROM fact_production_record f GROUP BY f.machine_id ORDER BY total_downtime DESC LIMIT 10",
+    "metrics": ["停机时长"],
+    "tables": ["fact_production_record"],
+    "description": "按设备汇总停机时长并排序"
+  },
+  {
+    "id": "example_004",
+    "question": "统计不同班次的平均质量得分",
+    "sql": "SELECT f.shift, AVG(f.quality_score) AS avg_quality_score FROM fact_production_record f GROUP BY f.shift ORDER BY avg_quality_score DESC",
+    "metrics": ["质量得分"],
+    "tables": ["fact_production_record"],
+    "description": "按班次聚合平均质量得分"
+  },
+  {
+    "id": "example_005",
+    "question": "统计各生产线的总产量",
+    "sql": "SELECT f.production_line, SUM(f.production_volume) AS total_volume FROM fact_production_record f GROUP BY f.production_line ORDER BY total_volume DESC",
+    "metrics": ["产量"],
+    "tables": ["fact_production_record"],
+    "description": "按生产线汇总产量"
+  },
+  {
+    "id": "example_006",
+    "question": "找出故障次数最多的设备",
+    "sql": "SELECT f.machine_id, SUM(f.fault_event_count) AS total_faults FROM fact_production_record f GROUP BY f.machine_id ORDER BY total_faults DESC LIMIT 10",
+    "metrics": ["故障次数"],
+    "tables": ["fact_production_record"],
+    "description": "按设备汇总故障次数"
+  },
+  {
+    "id": "example_007",
+    "question": "按产品类型统计平均缺陷率和平均良率",
+    "sql": "SELECT f.product_type, AVG(f.defect_rate) AS avg_defect_rate, AVG(f.first_pass_yield) AS avg_yield FROM fact_production_record f GROUP BY f.product_type ORDER BY avg_defect_rate DESC",
+    "metrics": ["缺陷率", "良率"],
+    "tables": ["fact_production_record"],
+    "description": "按产品类型同时统计缺陷率和良率"
+  },
+  {
+    "id": "example_008",
+    "question": "统计每条生产线关联的设备数量",
+    "sql": "SELECT l.line_id, COUNT(m.machine_id) AS machine_count FROM dim_line l LEFT JOIN dim_machine m ON l.line_id = m.line_id GROUP BY l.line_id ORDER BY machine_count DESC",
+    "metrics": [],
+    "tables": ["dim_line", "dim_machine"],
+    "description": "统计生产线下的设备数量"
+  }
+]
