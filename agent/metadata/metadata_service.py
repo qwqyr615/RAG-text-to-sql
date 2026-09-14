@@ -39,13 +39,17 @@ def _to_jsonable(value: Any) -> Any:
     return str(value)
 
 
-def get_metadata_json() -> dict[str, Any]:
+def get_metadata_json(engine: Any | None = None) -> dict[str, Any]:
     """读取当前数据源的完整元数据 JSON。
 
     表范围由 ``PRESET_BUSINESS_TABLES`` 白名单限定：单表模型下就是
     ``fact_production_record`` 一张，Agent 的 ``include_tables`` 也来自这里。
+
+    参数:
+        engine: 可注入的 SQLAlchemy Engine，默认用 ``get_engine()``。
+                单元测试用内存库注入，避免依赖 MySQL。
     """
-    engine = get_engine()
+    engine = engine if engine is not None else get_engine()
     inspector = inspect(engine)
     all_tables = set(inspector.get_table_names())
     table_names = [name for name in PRESET_BUSINESS_TABLES if name in all_tables]
@@ -133,11 +137,13 @@ def _get_row_count(engine: Any, table_name: str) -> int:
         return -1
 
 
-def export_metadata_json(path: Path | None = None) -> Path:
+def export_metadata_json(
+    path: Path | None = None, engine: Any | None = None
+) -> Path:
     """导出元数据 JSON 到 outputs/metadata.json。"""
     output_path = path or (OUTPUT_DIR / "metadata.json")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    data = get_metadata_json()
+    data = get_metadata_json(engine)
     output_path.write_text(
         json.dumps(data, ensure_ascii=False, indent=2),
         encoding="utf-8",

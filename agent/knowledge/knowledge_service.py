@@ -106,11 +106,17 @@ def resolve_knowledge(metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     }
 
 
-def export_knowledge_json(path: Path | None = None) -> Path:
-    """导出解析后的知识 JSON 到 outputs/knowledge.json。"""
+def export_knowledge_json(
+    path: Path | None = None, metadata: dict[str, Any] | None = None
+) -> Path:
+    """导出解析后的知识 JSON 到 outputs/knowledge.json。
+
+    参数:
+        metadata: 可注入的元数据字典（单元测试用假数据，避免依赖数据库）。
+    """
     output_path = path or (OUTPUT_DIR / "knowledge.json")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    data = resolve_knowledge()
+    data = resolve_knowledge(metadata)
     output_path.write_text(
         json.dumps(data, ensure_ascii=False, indent=2),
         encoding="utf-8",
