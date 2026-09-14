@@ -1,7 +1,15 @@
 """数据资源理解服务。
 
-从 MySQL 动态读取表结构、字段类型、样例值，
-再合并预置的表说明、字段说明、表间关系，最终输出统一 JSON。
+从数据库动态读取表结构、字段类型、样例值，输出统一 JSON 供 Agent / 前端使用。
+
+字段说明的来源优先级（**DDL 是唯一事实来源**）：
+
+1. 建表 DDL 的 ``COMMENT``（见 ``sql/02_create_fact_production_record.sql``）；
+2. 兜底：``metadata/preset_metadata.py`` 中人工维护的说明。
+
+表说明同理：优先读表级 ``COMMENT``，其次用 ``TABLE_DESCRIPTIONS``。
+这样「说明」与「结构」写在同一处，不会各改一份而漂移；健康检查
+（``scripts/check_schema_health.py``）会校验每个列都有 COMMENT。
 """
 
 import json
@@ -32,7 +40,11 @@ def _to_jsonable(value: Any) -> Any:
 
 
 def get_metadata_json() -> dict[str, Any]:
-    """读取当前数据源的完整元数据 JSON。"""
+    """读取当前数据源的完整元数据 JSON。
+
+    表范围由 ``PRESET_BUSINESS_TABLES`` 白名单限定：单表模型下就是
+    ``fact_production_record`` 一张，Agent 的 ``include_tables`` 也来自这里。
+    """
     engine = get_engine()
     inspector = inspect(engine)
     all_tables = set(inspector.get_table_names())
@@ -66,7 +78,10 @@ def get_metadata_json() -> dict[str, Any]:
                     "nullable": col.get("nullable", True),
                     "default": col.get("default"),
                     "primary_key": col_name in pk_columns,
-                    "description": get_column_description(table_name, col_name),
+                    "description": (
+                        str(col.get("comment") or "").strip()
+                        or get_column_description(table_name, col_name)
+                    ),
                     "sample_value": (
                         sample_rows[0].get(col_name) if sample_rows else None
                     ),
@@ -76,7 +91,10 @@ def get_metadata_json() -> dict[str, Any]:
         tables.append(
             {
                 "table_name": table_name,
-                "description": TABLE_DESCRIPTIONS.get(table_name, ""),
+                "description": (
+                    _get_table_comment(inspector, table_name)
+                    or TABLE_DESCRIPTIONS.get(table_name, "")
+                ),
                 "columns": columns,
                 "sample_rows": sample_rows,
                 "row_count": _get_row_count(engine, table_name),
@@ -95,6 +113,15 @@ def get_metadata_json() -> dict[str, Any]:
         "tables": tables,
         "relationships": relationships,
     }
+
+
+def _get_table_comment(inspector: Any, table_name: str) -> str:
+    """读取表级 COMMENT，失败时返回空字符串。"""
+    try:
+        comment = inspector.get_table_comment(table_name) or {}
+    except Exception:  # noqa: BLE001 - 部分方言不支持表注释
+        return ""
+    return str(comment.get("text") or "").strip()
 
 
 def _get_row_count(engine: Any, table_name: str) -> int:

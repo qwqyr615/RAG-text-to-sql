@@ -34,7 +34,8 @@ class DataResourceProvider(PromptSectionProvider):
     - 每张表内的字段同样按相关性排序，只展示前 ``max_columns_per_table`` 个，
       其余折叠并提示模型用 ``sql_db_schema`` 查看完整结构；
     - 样例值只给相关性最高的 ``sample_value_tables`` 张表，因为样例值最吃预算；
-    - 表间关系体积小、价值高，先预留预算后无条件带上。
+    - 尾块体积小、价值高，保证出现（``keep_last``）：有表间关系时输出关系，
+      单表模型下改为输出「不要生成 JOIN」的提示。
     """
 
     name = "metadata"
@@ -78,10 +79,16 @@ class DataResourceProvider(PromptSectionProvider):
             for rank, table in enumerate(ordered)
         ]
 
-        # 表间关系体积小、价值高，作为尾块保证一定出现（keep_last）
-        relationship_block = self._format_relationships(context)
-        if relationship_block:
-            blocks = blocks + [relationship_block]
+        # 尾块保证出现（keep_last）：有表间关系时输出关系；单表模型下改为
+        # 「不要 JOIN」的提示，避免模型自己在冗余的维度编码上做自连接。
+        tail_block = self._format_relationships(context)
+        if not tail_block and len(ordered) == 1:
+            tail_block = (
+                f"当前数据底座为单表模型：所有分析都在 "
+                f"{ordered[0].get('table_name')} 内完成，不要生成 JOIN。"
+            )
+        if tail_block:
+            blocks = blocks + [tail_block]
 
         content, dropped, truncated = pack_blocks(
             blocks,
@@ -90,7 +97,7 @@ class DataResourceProvider(PromptSectionProvider):
                 "…另有 {dropped} 张表因预算未展示，可用 sql_db_list_tables 查看全部表、"
                 "用 sql_db_schema 查看完整字段与样例值"
             ),
-            keep_last=bool(relationship_block),
+            keep_last=bool(tail_block),
         )
 
         return PromptSection(
@@ -335,11 +342,19 @@ class KnowledgeProvider(PromptSectionProvider):
         blocks: list[str] = []
 
         for theme in knowledge.get("themes") or []:
-            tables = "、".join(theme.get("related_tables") or []) or "无"
-            blocks.append(
-                f"- [分析主题] {theme.get('name', '')}：{theme.get('description', '')}"
-                f"（相关表：{tables}）"
-            )
+            tables = "、".join(theme.get("related_tables") or [])
+            description = theme.get("description", "")
+            if tables:
+                blocks.append(
+                    f"- [分析主题] {theme.get('name', '')}：{description}"
+                    f"（相关表：{tables}）"
+                )
+            else:
+                # 预留主题：明确说明当前无数据支撑，避免模型凭空造查询
+                blocks.append(
+                    f"- [分析主题] {theme.get('name', '')}：{description}"
+                    "（当前数据底座未接入该主题的数据表，不要为其生成查询）"
+                )
 
         for obj in knowledge.get("objects") or []:
             blocks.append(
