@@ -32,6 +32,9 @@ npm-debug.log*
 pnpm-debug.log*
 yarn-error.log*
 
+# pnpm 在项目盘符根目录留下的内容寻址仓库（可达上百 MB，不入库）
+.pnpm-store/
+
 # =====================
 # Java / Maven
 # =====================
