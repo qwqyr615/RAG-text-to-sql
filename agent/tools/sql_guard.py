@@ -20,6 +20,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 __all__ = [
     "ReadOnlyViolation",
+    "extract_table_refs",
     "validate_readonly_sql",
     "is_readonly_sql",
     "strip_sql_literals_and_comments",
@@ -65,6 +66,11 @@ _KEYWORD_RE = re.compile(
 _FUNCTION_CALL_RE = re.compile(
     r"\b(" + "|".join(BLOCKED_FUNCTION_CALLS) + r")\s*\(",
     re.IGNORECASE,
+)
+
+#: 抓取 FROM / JOIN 之后的表名，用于校验 SQL 引用的表是否存在
+_TABLE_REF_RE = re.compile(
+    r"\b(?:from|join)\s+`?([A-Za-z_][A-Za-z0-9_]*)`?", re.IGNORECASE
 )
 
 
@@ -204,3 +210,15 @@ def is_readonly_sql(sql: str) -> bool:
     except ReadOnlyViolation:
         return False
     return True
+
+
+def extract_table_refs(sql: str) -> set[str]:
+    """提取 SQL 中 ``FROM`` / ``JOIN`` 之后的表名（小写）。
+
+    典型用途：校验 RAG 示例库里的 SQL 是否引用了已经删除的表。
+    路线 B 删除了 ``dim_*`` 之后，示例库里残留的 ``JOIN dim_line`` 会把模型
+    直接带偏，这个函数就是用来抓这类问题的。
+    """
+    return {
+        match.group(1).lower() for match in _TABLE_REF_RE.finditer(sql or "")
+    }
