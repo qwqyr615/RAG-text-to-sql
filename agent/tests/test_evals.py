@@ -16,6 +16,7 @@ from evals.runner import (
     EvalConfig,
     build_prompt_builder,
     rows_match,
+    rows_match_projection,
     run_matrix,
 )
 from schemas.agent_io import AgentResult
@@ -75,6 +76,83 @@ def test_rows_match_rejects_different_values() -> None:
 
 def test_rows_match_handles_empty_results() -> None:
     assert rows_match([], [])
+
+
+# ----------------------------------------------------------------------
+# 列容错口径（诊断用，见 docs/EVALUATION.md）
+# ----------------------------------------------------------------------
+EXPECTED_TWO_COLUMNS = [[1, 97.9], [2, 96.1], [3, 95.5]]
+
+
+def test_projection_accepts_extra_context_columns() -> None:
+    """模型多带几列解释性上下文时，参照的列仍能全部对上 -> 判对。
+
+    这是从真实评测里抓出来的假阴性：问「良率最高的 5 条记录」，模型返回
+    ``rec_no, line_cd, lot_no, prod_tp, mach_no, sft, fpy``，参照只要 ``rec_no, fpy``。
+    答案在业务上更完整，但严格口径会判错。
+    """
+    actual = [
+        [1, "L", "B", "P", "M01", "Night", 97.9],
+        [2, "L", "B", "P", "M02", "Night", 96.1],
+        [3, "L", "B", "P", "M03", "Night", 95.5],
+    ]
+    assert not rows_match(EXPECTED_TWO_COLUMNS, actual)
+    assert rows_match_projection(EXPECTED_TWO_COLUMNS, actual)
+
+
+def test_projection_is_order_insensitive_between_rows() -> None:
+    """行顺序无关：模型加了 ORDER BY 的方向不同不应算错。"""
+    actual = [
+        [3, "L", "B", "P", "M03", "Night", 95.5],
+        [1, "L", "B", "P", "M01", "Night", 97.9],
+        [2, "L", "B", "P", "M02", "Night", 96.1],
+    ]
+    assert rows_match_projection(EXPECTED_TWO_COLUMNS, actual)
+
+
+def test_projection_rejects_missing_reference_column() -> None:
+    """多带列可以容忍，**少列不行** —— 答案少了东西就是错的。"""
+    actual = [[97.9], [96.1], [95.5]]
+    assert not rows_match_projection(EXPECTED_TWO_COLUMNS, actual)
+
+
+def test_projection_rejects_wrong_row_count() -> None:
+    """行数必须完全相同：漏写 WHERE / LIMIT 是真实错误，不能被容错口径洗白。"""
+    actual = [[1, "L", "B", "P", "M01", "Night", 97.9]]
+    assert not rows_match_projection(EXPECTED_TWO_COLUMNS, actual)
+
+
+def test_projection_rejects_semantically_wrong_answer() -> None:
+    """答非所问必须仍然判错。
+
+    真实案例 c22「利用率不到 60 的设备编号有哪些」，模型返回的是
+    ``MIN/AVG/MAX(util)`` 与设备计数 —— 这是理解错了问题，不是多带列。
+    列容错口径不能把它变成「对」。
+    """
+    expected = [[f"M{i:02d}"] for i in range(1, 21)]
+    actual = [[51.9, 70.1, 88.8, 5]]
+    assert not rows_match(expected, actual)
+    assert not rows_match_projection(expected, actual)
+
+
+def test_projection_rejects_excessive_extra_columns() -> None:
+    """多带太多列就不是「补充上下文」而是答非所问，退回严格判定。"""
+    expected = [[1, 2]]
+    actual = [[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]]
+    assert not rows_match_projection(expected, actual)
+
+
+def test_projection_matches_strict_when_widths_are_equal() -> None:
+    """列数相同时必须与严格口径完全一致，不能偷偷放宽。"""
+    same = [[1, 2.0], [2, 3.0]]
+    assert rows_match_projection(same, same)
+    # 列数相同但值错 -> 仍然判错
+    assert not rows_match_projection(same, [[1, 9.0], [2, 3.0]])
+    # 列数相同但顺序不同（值换了列）-> 仍然判错，不是「多带列」场景
+    assert not rows_match_projection([[1, "A"]], [["A", 1]])
+
+    # 空结果集
+    assert rows_match_projection([], [])
 
 
 # ----------------------------------------------------------------------

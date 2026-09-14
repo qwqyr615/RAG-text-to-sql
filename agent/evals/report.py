@@ -26,6 +26,70 @@ def _delta(value: float, baseline: float) -> str:
     return f"{diff:+.1f}pp"
 
 
+def _render_sql_comparison(
+    outcomes: Sequence[ConfigOutcome],
+    reference_by_case: dict[str, str],
+) -> list[str]:
+    """渲染「不一致用例」的生成 SQL 与参照 SQL 对照。
+
+    报告只给三态（一致 / 结果不符 / 执行失败）是不够的：同一批用例在**所有配置下
+    都失败**时，光看三态无法区分
+
+    - 模型真的算错了（语义错），还是
+    - 评测口径的假阴性 —— 例如参照 SQL 是 ``ORDER BY x DESC LIMIT 5``，
+      模型写了 ``LIMIT 10``，行数不同即判错，但语义并没有错。
+
+    把两侧 SQL 直接摆出来，一眼就能分辨。这是 ``scripts/diagnose_cases.py``
+    的静态版本：不必为了看 SQL 再花一次大模型调用。
+    """
+    if not outcomes or not outcomes[0].outcomes:
+        return []
+
+    # 找出「在所有配置下都没一致」的用例 —— 这批最可疑，优先展示
+    always_failing: list[str] = []
+    for item in outcomes[0].outcomes:
+        marks = [
+            (outcome.by_case_id.get(item.case_id) or None) for outcome in outcomes
+        ]
+        if all(mark is None or not mark.result_match for mark in marks):
+            always_failing.append(item.case_id)
+
+    if not always_failing:
+        return []
+
+    lines = [
+        "",
+        "## 三、不一致用例的 SQL 对照",
+        "",
+        f"下面 {len(always_failing)} 条在**所有配置下都没有一致**，最值得先看。",
+        "若生成 SQL 与参照 SQL 语义等价、只是取数范围不同（典型是 ``LIMIT`` 大小差异），",
+        "那更可能是评测口径的假阴性，而不是模型算错。",
+        "",
+    ]
+
+    for case_id in always_failing:
+        lines.append(f"### {case_id}")
+        lines.append("")
+        reference = reference_by_case.get(case_id, "")
+        if reference:
+            lines.append(f"- 参照 SQL：`{reference}`")
+            lines.append("")
+        for outcome in outcomes:
+            item = outcome.by_case_id.get(case_id)
+            if item is None:
+                continue
+            verdict = (
+                "一致" if item.result_match else ("结果不符" if item.sql_ok else "执行失败")
+            )
+            lines.append(f"- **`{outcome.config.name}`**：{verdict}，生成 {item.row_count} 行")
+            if item.error:
+                lines.append(f"  - 错误：{item.error}")
+            lines.append(f"  - 生成 SQL：`{item.generated_sql or '（未提取到 SQL）'}`")
+        lines.append("")
+
+    return lines
+
+
 def render_markdown(
     outcomes: Sequence[ConfigOutcome],
     *,
@@ -83,8 +147,8 @@ def render_markdown(
             "判定标准为**执行结果一致率**：生成的 SQL 与人工参照 SQL 都真正执行，"
             "比较结果集（行数、列数、取值；行顺序无关，数值按 0.1% 相对容差）。",
             "",
-            "| 配置 | 可执行率 | 结果一致率 | 相似问题一致率 | 新问题一致率 | 平均耗时 | 平均 Prompt 字符 |",
-            "|---|---|---|---|---|---|---|",
+            "| 配置 | 可执行率 | 结果一致率 | 列容错一致率 | 相似问题一致率 | 新问题一致率 | 平均耗时 | 平均 Prompt 字符 |",
+            "|---|---|---|---|---|---|---|---|",
         ]
     )
 
@@ -97,16 +161,27 @@ def render_markdown(
 
     for outcome in outcomes:
         lines.append(
-            "| `{name}` | {exec_rate} | {acc} | {seen_acc} | {new_acc} | {latency:.0f} ms | {chars:.0f} |".format(
+            "| `{name}` | {exec_rate} | {acc} | {proj} | {seen_acc} | {new_acc} | {latency:.0f} ms | {chars:.0f} |".format(
                 name=outcome.config.name,
                 exec_rate=_pct(outcome.execution_rate()),
                 acc=_pct(outcome.accuracy()),
+                proj=_pct(outcome.accuracy_projection()),
                 seen_acc=_pct(outcome.accuracy(seen=True)),
                 new_acc=_pct(outcome.accuracy(seen=False)),
                 latency=outcome.avg_latency_ms(),
                 chars=outcome.avg_prompt_chars(),
             )
         )
+
+    # 「只是多带了几列」的用例清单一并列出：这是严格口径与列容错口径的差值来源
+    extra_only: dict[str, list[str]] = {
+        outcome.config.name: outcome.extra_column_only() for outcome in outcomes
+    }
+    if any(extra_only.values()):
+        lines.extend(["", "严格口径判错、但列容错口径判对的用例（即「答案对、多带了几列上下文」）：", ""])
+        for name, case_ids in extra_only.items():
+            lines.append(f"- `{name}`：{('、'.join(case_ids)) or '无'}")
+        lines.append("")
 
     if baseline is not None:
         lines.extend(["", f"以 `{baseline.config.name}` 为基线的增量：", ""])
@@ -157,6 +232,16 @@ def render_markdown(
                 + " | ".join(marks)
                 + " |"
             )
+
+        # 不一致用例的 SQL 对照。没有这一节，每次想问「模型到底写了什么」都得重跑
+        # 一遍评测（几十到上百次大模型调用），而重跑的结果还可能因温度而不同 ——
+        # 那样就永远分不清「模型语义错」与「评测口径假阴性」。
+        lines.extend(
+            _render_sql_comparison(
+                outcomes,
+                {case.case_id: case.reference_sql for case in (cases or [])},
+            )
+        )
 
     lines.extend(
         [

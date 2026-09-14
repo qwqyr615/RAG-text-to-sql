@@ -61,6 +61,7 @@ __all__ = [
     "collect_reference_results",
     "default_agent_factory",
     "rows_match",
+    "rows_match_projection",
     "run_case",
     "run_matrix",
 ]
@@ -270,7 +271,7 @@ def rows_match(
     *,
     tolerance: float = TOLERANCE,
 ) -> bool:
-    """比较少行结果集是否一致。
+    """比较结果集是否一致（严格口径，主指标）。
 
     规则（与常见 text-to-SQL 评测口径一致）：
 
@@ -298,6 +299,102 @@ def rows_match(
         ):
             return False
     return True
+
+
+def rows_match_projection(
+    expected: Sequence[Sequence[Any]],
+    actual: Sequence[Sequence[Any]],
+    *,
+    tolerance: float = TOLERANCE,
+    max_extra_columns: int = 6,
+) -> bool:
+    """列容错口径：要求参照的每一列都能在生成结果里找到对应列。
+
+    **为什么需要第二套口径**
+    ------------------------
+    ``rows_match`` 要求列数完全相同，这对「开放式 text-to-SQL 基准」是合理的
+    （答案是唯一确定的结果集），但对**对话式问析系统**过严：模型给出分析时常常
+    顺带返回几个有解释力的附加列，例如
+
+    - 问「良率最高的 5 条记录」-> 返回这 5 条记录的 ``rec_no, mach_no, line_cd,
+      lot_no, sft, prod_tp, fpy``（而参照只要 ``rec_no, fpy``）；
+    - 问「各班组平均质量得分」-> 多带一个 ``COUNT(*)`` 说明样本量。
+
+    这些答案在业务上**更完整**，却被判为「结果不符」。实测（见
+    ``docs/EVALUATION.md``）这会让 40 条里的近两成变成假阴性 —— 很容易被误读成
+    「换成客户表以后模型不行了」。
+
+    规则：
+
+    1. 行数必须完全相同（仍然守住 ``LIMIT`` / ``WHERE`` 这类真实错误）；
+    2. 参照的每一列都必须能在生成结果里找到一列与之**逐行取值一致**；
+    3. 生成结果最多比参照多 ``max_extra_columns`` 列 —— 多了就不是「顺带补充」，
+       而是答非所问，退回严格判定；
+    4. 列匹配用**稳定匹配**（按行取值排序后比较），因此不依赖列顺序。
+
+    注意这是**诊断口径**，不替换主指标：报告同时给出两者，读者可以自己判断。
+    严格口径的分数仍然保留，避免「把口径改松来刷分」。
+    """
+    if len(expected) != len(actual):
+        return False
+    if not expected:
+        return True
+
+    expected_rows = [tuple(row) for row in expected]
+    actual_rows = [tuple(row) for row in actual]
+    expected_width = len(expected_rows[0])
+    actual_width = len(actual_rows[0])
+
+    if actual_width < expected_width:
+        return False
+    if actual_width - expected_width > max_extra_columns:
+        return False
+    if actual_width == expected_width:
+        return rows_match(expected, actual, tolerance=tolerance)
+
+    # 参照列的规范化列向量，用于与生成结果的每一列做匹配
+    expected_columns = [
+        _column_vector(expected_rows, index) for index in range(expected_width)
+    ]
+    actual_columns = [
+        _column_vector(actual_rows, index) for index in range(actual_width)
+    ]
+
+    matched_actual: set[int] = set()
+    for vector in expected_columns:
+        for position, candidate in enumerate(actual_columns):
+            if position in matched_actual:
+                continue
+            if _vectors_equal(vector, candidate, tolerance):
+                matched_actual.add(position)
+                break
+        else:
+            # 参照的某一列在生成结果里找不到对应 —— 缺列，判错
+            return False
+    return True
+
+
+def _column_vector(
+    rows: Sequence[tuple[Any, ...]], index: int
+) -> list[Any]:
+    """取第 ``index`` 列的全部取值，按规范化后的值排序。
+
+    排序保证与行顺序无关；用取值而不是列名比较，因为两边别名可能不同
+    （``total_downtime_minutes`` vs ``total_stop_min`` 指的是同一个量）。
+    """
+    return sorted(
+        (row[index] for row in rows if index < len(row)), key=_canonical
+    )
+
+
+def _vectors_equal(
+    left: Sequence[Any], right: Sequence[Any], tolerance: float
+) -> bool:
+    if len(left) != len(right):
+        return False
+    return all(
+        _values_equal(a, b, tolerance) for a, b in zip(left, right)
+    )
 
 
 # ----------------------------------------------------------------------
@@ -333,6 +430,10 @@ class CaseOutcome:
     generated_sql: str = ""
     sql_ok: bool = False
     result_match: bool = False
+    #: 列容错口径下是否一致（诊断用，见 ``rows_match_projection``）。
+    #: 严格口径 ``result_match`` 仍是主指标；两者都记录，报告同时展示，
+    #: 这样「模型多带了几列上下文」与「模型真的算错」可以分开看。
+    result_match_projection: bool = False
     error: str | None = None
     latency_ms: float = 0.0
     prompt_chars: int = 0
@@ -379,8 +480,10 @@ def run_case(
         outcome.error = result.sql_error
 
     outcome.sql_ok = bool(result.sql) and not result.sql_error
-    outcome.result_match = outcome.sql_ok and rows_match(
-        expected_rows, list(result.rows or [])
+    rows = list(result.rows or [])
+    outcome.result_match = outcome.sql_ok and rows_match(expected_rows, rows)
+    outcome.result_match_projection = outcome.sql_ok and rows_match_projection(
+        expected_rows, rows
     )
     return outcome
 
@@ -416,8 +519,24 @@ class ConfigOutcome:
         return self._rate(self.subset(seen=seen), "sql_ok")
 
     def accuracy(self, *, seen: bool | None = None) -> float:
-        """结果与参照一致的比例（核心指标）。"""
+        """结果与参照一致的比例（核心指标，严格口径）。"""
         return self._rate(self.subset(seen=seen), "result_match")
+
+    def accuracy_projection(self, *, seen: bool | None = None) -> float:
+        """列容错口径下的一致率（诊断指标）。
+
+        与 :meth:`accuracy` 的差值 = 「答案其实对，只是多带了几列上下文」的比例。
+        这个差值大，说明严格口径在惩罚模型的多余善意，而不是模型算错。
+        """
+        return self._rate(self.subset(seen=seen), "result_match_projection")
+
+    def extra_column_only(self) -> list[str]:
+        """严格口径判错、但列容错口径判对的用例 ID（即「只是多带了列」）。"""
+        return [
+            outcome.case_id
+            for outcome in self.outcomes
+            if outcome.result_match_projection and not outcome.result_match
+        ]
 
     def avg_latency_ms(self) -> float:
         if not self.outcomes:
