@@ -21,10 +21,13 @@ import pytest
 from core.config import BASE_DIR
 from knowledge.knowledge_base import ANALYSIS_THEMES, BUSINESS_OBJECTS
 from knowledge.knowledge_service import resolve_knowledge
+from metadata.mapping import resolve_mapping
+from metadata.inventory import discover_tables
+from metadata.mapping.schema import validate_profile
 from metadata.preset_metadata import (
     COLUMN_DESCRIPTIONS,
-    PRESET_BUSINESS_TABLES,
     RELATIONSHIPS,
+    STANDARD_SERVICE_TABLE,
 )
 from metadata.schema_ddl import (
     CONVERTED_NUMERIC_COLUMNS,
@@ -41,10 +44,15 @@ from metadata.schema_ddl import (
     read_sql,
     resolve_path,
 )
+from metadata.standard_fields import STANDARD_FIELDS
 from prompt.base import PromptContext
 from prompt.providers import DataResourceProvider, KnowledgeProvider
 
 EXPECTED_COLUMN_COUNT = 45
+
+#: 仓库自带的映射文件（发现 + 字段口径的入口）
+STANDARD_MAPPING = "mappings/standard_production.mapping.yaml"
+CUSTOMER_MAPPING = "mappings/mes_prod_log.mapping.yaml"
 
 
 # ----------------------------------------------------------------------
@@ -161,7 +169,8 @@ def test_scripts_import_without_connecting_to_database() -> None:
 
     assert callable(init_module.apply_schema)
     assert callable(health_module.run_health_check)
-    assert len(health_module.CHECKS) == 9
+    # 9 项标准模型检查 + 发现模式 + 字段映射 = 11 项
+    assert len(health_module.CHECKS) == 11
 
 
 def _run_script_directly(script_name: str) -> subprocess.CompletedProcess:
@@ -202,14 +211,133 @@ def test_scripts_run_directly_without_import_errors(script_name: str) -> None:
 
 
 # ----------------------------------------------------------------------
-# preset_metadata 与知识模型对齐
+# 发现模式与字段映射（替代原先的硬编码白名单）
 # ----------------------------------------------------------------------
-def test_business_table_whitelist_is_single_table() -> None:
-    assert PRESET_BUSINESS_TABLES == [expected_table()]
+def test_standard_mapping_covers_every_ddl_column() -> None:
+    """新契约：标准底座的字段口径来自 mapping.yaml，而不是代码里的白名单。
+
+    这条断言承接了原先 ``PRESET_BUSINESS_TABLES == [expected_table()]`` 的作用 ——
+    但方向反了过来：不再检查「代码里的表名是不是 DDL 那张表」，而是检查
+    「映射文件是否完整覆盖了 DDL 声明的每一列」。漏一列就意味着模型拿不到那列的
+    口径，只能靠猜。
+    """
+    mapping = resolve_mapping(STANDARD_MAPPING, use_cache=False)
+    assert mapping is not None
+
+    assert mapping.tables == [expected_table()]
+    assert mapping.profile.discovery.get("exclude"), "标准映射必须排除未治理的原始层"
+
+    mapped_columns = {item.column for item in mapping.table(expected_table())}
+    ddl_columns = {column.name for column in expected_columns()}
+    assert mapped_columns == ddl_columns, (
+        f"映射未覆盖的列：{sorted(ddl_columns - mapped_columns)}；"
+        f"映射中多余的列：{sorted(mapped_columns - ddl_columns)}"
+    )
+
+
+def test_standard_mapping_binds_every_standard_field() -> None:
+    """45 个标准字段应当都被标准底座认出，否则指标段会静默缺项。"""
+    mapping = resolve_mapping(STANDARD_MAPPING, use_cache=False)
+    assert mapping is not None
+
+    bound = {item.standard_field for item in mapping.table(expected_table())}
+    missing = sorted({field.name for field in STANDARD_FIELDS} - bound)
+    assert missing == [], f"标准底座未绑定的标准字段：{missing}"
+
+
+def test_standard_mapping_needs_no_unit_conversion() -> None:
+    """标准底座的单位就是规范单位，不应出现任何换算。"""
+    mapping = resolve_mapping(STANDARD_MAPPING, use_cache=False)
+    assert mapping is not None
+
+    converted = [item for item in mapping.table(expected_table()) if item.needs_conversion]
+    assert converted == [], f"标准底座不该有单位换算：{converted}"
+
+
+def test_customer_mapping_declares_unit_conversions_explicitly() -> None:
+    """客户映射的核心价值：把「客户单位 ≠ 标准口径」显式写出来。
+
+    ``mes_prod_log`` 的 ``def_rate`` / ``util`` 存的是比例（0.039 / 0.70），
+    标准口径是百分数（3.9 / 70）。映射必须给出 ×100 表达式，否则生成的 SQL
+    结果会整体差 100 倍，而且**不会报错** —— 属于最危险的一类静默错误。
+    """
+    mapping = resolve_mapping(CUSTOMER_MAPPING, use_cache=False)
+    assert mapping is not None
+
+    converted = {
+        item.standard_field: item.expression
+        for item in mapping.table("mes_prod_log")
+        if item.needs_conversion
+    }
+    assert converted == {
+        "machine_utilization": "util * 100",
+        "defect_rate": "def_rate * 100",
+    }
+
+
+def test_customer_mapping_excludes_equivalent_tables() -> None:
+    """客户映射必须把「内容等价但没治理」的表排除掉，避免模型随机挑选。"""
+    mapping = resolve_mapping(CUSTOMER_MAPPING, use_cache=False)
+    assert mapping is not None
+
+    excluded = set(mapping.profile.discovery.get("exclude") or [])
+    assert "intelligent_production_iiot" in excluded  # 未治理的原始层
+    assert "fact_production_record" in excluded  # 与客户表内容等价的标准表
+
+
+def test_mappings_pass_structural_validation() -> None:
+    """仓库里的映射文件本身必须通过校验（CI 意义）。"""
+    for path in (STANDARD_MAPPING, CUSTOMER_MAPPING):
+        mapping = resolve_mapping(path, use_cache=False)
+        assert mapping is not None, path
+        problems = [
+            issue.render()
+            for issue in validate_profile(mapping.profile)
+            if issue.is_error
+        ]
+        assert problems == [], f"{path} 校验未通过：{problems}"
+
+
+def test_customer_mapping_defers_to_standard_field_vocabulary() -> None:
+    """映射只能使用词典里的标准字段 —— 防止接入时自造字段名。"""
+    valid = {field.name for field in STANDARD_FIELDS}
+    for path in (STANDARD_MAPPING, CUSTOMER_MAPPING):
+        mapping = resolve_mapping(path, use_cache=False)
+        assert mapping is not None
+        for table in mapping.tables:
+            for item in mapping.table(table):
+                assert item.standard_field in valid, (
+                    f"{path} 使用了词典外的标准字段：{item.standard_field}"
+                )
+
+
+def test_discovery_excludes_system_tables() -> None:
+    """发现模式必须挡住系统表前缀（不依赖具体客户库）。
+
+    SQLite 不允许建 ``sqlite_*`` 表，所以这里用 ``information_schema_*`` 前缀
+    来验证前缀规则同样生效。
+    """
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine("sqlite://")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE business_fact (id INTEGER)"))
+        conn.execute(text("CREATE TABLE information_schema_columns (c TEXT)"))
+
+    inventory = discover_tables(engine)
+    assert "business_fact" in inventory.business_tables
+    assert "information_schema_columns" not in inventory.business_tables
+    assert "information_schema_columns" in inventory.excluded
 
 
 def test_relationships_are_empty_for_single_table_model() -> None:
+    """内置关系为空：单表模型下不应声明无意义的 JOIN。"""
     assert RELATIONSHIPS == []
+
+
+def test_standard_service_table_is_the_ddl_table() -> None:
+    """``STANDARD_SERVICE_TABLE`` 只是「未配置映射」时的兜底，必须与 DDL 一致。"""
+    assert STANDARD_SERVICE_TABLE == expected_table()
 
 
 def test_column_descriptions_only_reference_service_table() -> None:

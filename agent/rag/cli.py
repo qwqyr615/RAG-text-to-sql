@@ -30,7 +30,6 @@ from typing import Sequence
 
 from core.config import settings
 from metadata.metadata_service import get_metadata_json
-from metadata.preset_metadata import PRESET_BUSINESS_TABLES
 from rag.sql_example_store import (
     collection_row_count,
     drop_sql_examples,
@@ -42,14 +41,21 @@ from rag.sql_example_store import (
 
 
 def _known_tables() -> list[str] | None:
-    """线上业务表白名单；读取失败时返回 None（跳过表名校验）。"""
+    """线上业务表清单（发现模式的结果）；读取失败时返回 None（跳过表名校验）。
+
+    表范围来自 ``metadata_service`` 的发现过程，不再读硬编码白名单 ——
+    换客户库时这里要跟着变的只有 ``mapping.yaml``。
+    """
     try:
         metadata = get_metadata_json()
     except Exception as exc:  # noqa: BLE001 - 校验是可选的，读不到就跳过
         print(f"[warn] 读取元数据失败，跳过表名校验：{exc}")
         return None
     tables = [table["table_name"] for table in metadata.get("tables") or []]
-    return tables or list(PRESET_BUSINESS_TABLES)
+    if not tables:
+        print("[warn] 发现模式下没有可见业务表，跳过表名校验")
+        return None
+    return tables
 
 
 def _print_problems(problems: Sequence[str]) -> None:

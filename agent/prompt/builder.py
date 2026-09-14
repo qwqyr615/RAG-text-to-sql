@@ -110,6 +110,7 @@ class SQLAgentPromptBuilder:
                     min_tables=settings.prompt_metadata_min_tables,
                     max_columns_per_table=settings.sql_max_columns_per_table,
                     sample_value_tables=settings.prompt_metadata_sample_tables,
+                    field_map_budget=settings.prompt_field_map_budget,
                 ),
                 MetricsProvider(
                     settings.prompt_metrics_budget,

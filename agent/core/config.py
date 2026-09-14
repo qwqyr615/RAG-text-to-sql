@@ -32,6 +32,17 @@ class Settings(BaseSettings):
     # ========== 数据库配置 ==========
     database_url: str = f"sqlite:///{(BASE_DIR / 'data' / 'agent.db').as_posix()}"
 
+    # ========== 发现模式与字段映射 ==========
+    # 客户接入契约：mapping.yaml 的相对路径（相对 agent/）。
+    # 留空或写 none 时退回「单表标准模型」：直接用数据库列 COMMENT 作为字段说明。
+    analysis_mapping: str = ""
+    # 发现模式的发现范围：空 = 扫描全库（排除系统表与原始层）
+    # 想固定成若干张表时，在 mapping.yaml 的 discovery.include 里声明，而不是改代码。
+    # 跨客户通用的排除项（客户特有的排除写在 mapping.yaml 的 discovery.exclude）。
+    # 注意不要把某个客户的表名写在这里 —— 那是 mapping.yaml 的职责。
+    discovery_exclude_tables: str = ""
+    discovery_exclude_prefixes: str = ""
+
     # SQL Agent 建表时提供给大模型的样例行数
     sql_sample_rows: int = 3
 
@@ -67,6 +78,9 @@ class Settings(BaseSettings):
     prompt_metadata_min_tables: int = 3
     # 元数据段给相关性最高的几张表附带样例值
     prompt_metadata_sample_tables: int = 2
+    # 字段映射块（标准字段 ↔ 客户列，含单位换算说明）的字符预算。
+    # 客户库列名与业务词不对应时，这一块是正确率的关键，因此单独留预算。
+    prompt_field_map_budget: int = 900
     # 单张表最多展示多少个字段，其余提示模型用 sql_db_schema 查看
     sql_max_columns_per_table: int = 25
 

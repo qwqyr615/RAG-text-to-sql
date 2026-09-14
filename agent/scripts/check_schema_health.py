@@ -11,7 +11,11 @@
 7. 数值排序回归：列的 ``MIN`` / ``MAX`` 必须等于「按数值解释后的 MIN/MAX」
    （TEXT 存储时是字典序，两者不等，这正是曾经静默返回错误答案的根因）
 8. 每个列都有 COMMENT（保证元数据说明不丢失）
-9. ``preset_metadata`` 不引用不存在的表或列
+9. **发现模式**：Agent 可见表集合由扫描 + 排除规则得出，且排除了原始层
+10. **字段映射**（配置了 ``ANALYSIS_MAPPING`` 时）：映射能编译、引用的表与列都真实存在
+
+检查 9 / 10 替代了原先的「preset_metadata 白名单校验」—— 业务表范围不再是代码里的
+常量，而是发现与映射的产物，因此校验对象也跟着变。
 
 运行::
 
@@ -36,11 +40,11 @@ if str(_AGENT_ROOT) not in sys.path:
 from sqlalchemy import inspect, text  # noqa: E402
 from sqlalchemy.engine import Engine  # noqa: E402
 
-from metadata.preset_metadata import (  # noqa: E402
-    COLUMN_DESCRIPTIONS,
-    PRESET_BUSINESS_TABLES,
-    RELATIONSHIPS,
-)
+from core.config import settings  # noqa: E402
+from metadata.inventory import discover_tables  # noqa: E402
+from metadata.mapping import resolve_mapping  # noqa: E402
+from metadata.mapping.schema import mapping_coverage  # noqa: E402
+from metadata.preset_metadata import COLUMN_DESCRIPTIONS, RELATIONSHIPS  # noqa: E402
 from metadata.schema_ddl import (  # noqa: E402
     CONVERTED_NUMERIC_COLUMNS,
     LEGACY_DIM_TABLES,
@@ -124,6 +128,12 @@ def _snapshot(engine: Engine, table: str) -> SchemaSnapshot:
 # 检查项
 # ----------------------------------------------------------------------
 def _check_table_inventory(engine: Engine, snapshot: SchemaSnapshot) -> CheckResult:
+    """标准模型表清单：原始层 + 服务层必须存在，历史派生维表必须不存在。
+
+    注意**不**把「库里还有别的表」判为失败：客户库里本来就会有别的业务表
+    （例如本次评测的 ``mes_prod_log``）。哪些表对 Agent 可见由发现模式决定，
+    由 ``_check_discovery_mode`` 单独把关。
+    """
     table = expected_table()
     missing = [name for name in (table, SOURCE_TABLE) if name not in snapshot.table_names]
     leftovers = [name for name in LEGACY_DIM_TABLES if name in snapshot.table_names]
@@ -140,7 +150,12 @@ def _check_table_inventory(engine: Engine, snapshot: SchemaSnapshot) -> CheckRes
         )
     if leftovers:
         notes.append(f"仍存在历史派生维表：{', '.join(leftovers)}（路线 B 不应保留）")
-    return CheckResult(name="表清单符合单表模型", passed=passed, detail=detail, notes=notes)
+    return CheckResult(
+        name="标准模型表清单（原始层 + 服务层，无历史派生维表）",
+        passed=passed,
+        detail=detail,
+        notes=notes,
+    )
 
 
 def _compare_columns(
@@ -389,18 +404,138 @@ def _check_comments(engine: Engine, snapshot: SchemaSnapshot) -> CheckResult:
     )
 
 
-def _check_preset_metadata(engine: Engine, snapshot: SchemaSnapshot) -> CheckResult:
+def _split_list(raw: str) -> list[str]:
+    return [item.strip() for item in str(raw or "").split(",") if item.strip()]
+
+
+def _load_profile_quietly() -> Any:
+    """加载映射的 ``discovery`` 规则；加载失败时返回 ``None``。
+
+    发现模式检查要的是「排除规则生效了吗」，映射本身能不能编译由
+    ``_check_mapping`` 单独负责 —— 这里失败不该重复报错。
+    """
+    try:
+        mapping = resolve_mapping(use_cache=False)
+    except Exception:  # noqa: BLE001
+        return None
+    return mapping.profile if mapping else None
+
+
+def _check_discovery_mode(engine: Engine, snapshot: SchemaSnapshot) -> CheckResult:
+    """发现模式：Agent 可见表由扫描 + 排除规则得出，原始层必须被挡住。
+
+    这条检查取代了原先的「白名单引用了不存在的表」。业务表范围不再是代码里的常量，
+    因此要守住的是两件事：
+
+    1. 可见表集合非空（否则 Agent 启动时会直接失败）；
+    2. 原始层 ``intelligent_production_iiot`` 不在可见集合里 —— 它是未治理的脏类型
+       副本，暴露出去会让模型在两张内容等价的表之间随机挑选并可能算错。
+    """
+    inventory = discover_tables(
+        engine,
+        exclude=_split_list(settings.discovery_exclude_tables),
+        exclude_prefixes=_split_list(settings.discovery_exclude_prefixes),
+        profile=_load_profile_quietly(),
+    )
     issues: list[str] = []
 
-    for name in PRESET_BUSINESS_TABLES:
-        if name not in snapshot.table_names:
-            issues.append(f"PRESET_BUSINESS_TABLES 引用了不存在的表：{name}")
-    if expected_table() not in PRESET_BUSINESS_TABLES:
-        issues.append(f"PRESET_BUSINESS_TABLES 未包含服务层表：{expected_table()}")
+    if not inventory.business_tables:
+        issues.append("发现模式下没有可见业务表，Agent 将无法启动")
+    if SOURCE_TABLE in inventory.business_tables:
+        issues.append(
+            f"原始层 {SOURCE_TABLE} 暴露给了 Agent（字段类型未经治理，"
+            "应在 mapping.yaml 的 discovery.exclude 或 DISCOVERY_EXCLUDE_TABLES 中排除）"
+        )
+
+    detail = (
+        f"{inventory.summary()}；可见：{', '.join(inventory.business_tables) or '无'}"
+    )
+    if inventory.excluded:
+        detail += f"；排除：{', '.join(sorted(inventory.excluded))}"
+
+    return CheckResult(
+        name="发现模式（扫描全库 + 排除系统表与原始层）",
+        passed=not issues,
+        detail=detail,
+        notes=issues,
+    )
+
+
+def _check_mapping(engine: Engine, snapshot: SchemaSnapshot) -> CheckResult:
+    """字段映射：能编译、引用的表与列真实存在、覆盖率可解释。
+
+    未配置映射时本项直接通过（此时系统走「单表标准模型」，用列 COMMENT 当说明），
+    并在 detail 里说明 —— 免得看到 PASS 却不知道到底验了什么。
+    """
+    from metadata.mapping import default_mapping_path
+
+    target = default_mapping_path()
+    if target is None:
+        return CheckResult(
+            name="字段映射（ANALYSIS_MAPPING）",
+            passed=True,
+            detail="未配置映射，系统按「单表标准模型」使用数据库列 COMMENT 作为字段说明",
+        )
+
+    try:
+        mapping = resolve_mapping(use_cache=False)
+    except Exception as exc:  # noqa: BLE001 - 映射错误要作为检查失败报出来
+        return CheckResult(
+            name="字段映射（ANALYSIS_MAPPING）",
+            passed=False,
+            detail=f"加载映射失败：{target}",
+            notes=[str(exc)],
+        )
+
+    if mapping is None:  # pragma: no cover - 与上面 target is None 等价
+        return CheckResult(name="字段映射（ANALYSIS_MAPPING）", passed=True, detail="未启用")
+
+    inspector = inspect(engine)
+    live_columns = {
+        table: [str(column["name"]) for column in inspector.get_columns(table)]
+        for table in inspector.get_table_names()
+    }
+    coverage = mapping_coverage(mapping.profile, live_columns)
+
+    issues: list[str] = []
+    for table_name, info in coverage["tables"].items():
+        if info["standard_fields"] == 0:
+            issues.append(f"{table_name}: 一个标准字段都没有映射")
+        if info["unmapped_columns"]:
+            issues.append(
+                f"{table_name}: {len(info['unmapped_columns'])} 个列没有标准口径"
+                f"（{', '.join(info['unmapped_columns'][:8])}）"
+            )
+
+    converted = [
+        item
+        for table in mapping.tables
+        for item in mapping.table(table)
+        if item.needs_conversion
+    ]
+
+    detail = (
+        f"profile={mapping.profile.profile or '未命名'}，"
+        f"表 {len(mapping.tables)} 张，"
+        f"标准字段 {sum(len(mapping.table(t)) for t in mapping.tables)} 个，"
+        f"需单位换算 {len(converted)} 个"
+    )
+    return CheckResult(
+        name="字段映射（ANALYSIS_MAPPING）",
+        passed=not issues,
+        detail=detail,
+        notes=issues,
+    )
+
+
+def _check_preset_metadata(engine: Engine, snapshot: SchemaSnapshot) -> CheckResult:
+    """兜底说明不引用不存在的表或列（仅在未配置映射时才有实际约束力）。"""
+    issues: list[str] = []
+    known_tables = snapshot.table_names
 
     for key in COLUMN_DESCRIPTIONS:
         table_name, _, column_name = key.partition(".")
-        if table_name not in snapshot.table_names:
+        if table_name not in known_tables:
             issues.append(f"COLUMN_DESCRIPTIONS 引用了不存在的表：{key}")
         elif column_name and table_name == expected_table():
             if snapshot.column(column_name) is None:
@@ -411,19 +546,16 @@ def _check_preset_metadata(engine: Engine, snapshot: SchemaSnapshot) -> CheckRes
         for side in ("source", "target"):
             table_name = relation[f"{side}_table"]
             column_name = relation[f"{side}_column"]
-            if table_name not in snapshot.table_names:
+            if table_name not in known_tables:
                 issues.append(f"RELATIONSHIPS 引用了不存在的表：{table_name}")
             elif table_name == expected_table() and snapshot.column(column_name) is None:
                 issues.append(
                     f"RELATIONSHIPS 引用了不存在的列：{table_name}.{column_name}"
                 )
 
-    detail = (
-        f"白名单 {len(PRESET_BUSINESS_TABLES)} 张表，"
-        f"字段说明 {len(COLUMN_DESCRIPTIONS)} 条，表间关系 {len(relations)} 条"
-    )
+    detail = f"兜底字段说明 {len(COLUMN_DESCRIPTIONS)} 条，表间关系 {len(relations)} 条"
     return CheckResult(
-        name="preset_metadata 不引用不存在的表或列",
+        name="兜底说明不引用不存在的表或列",
         passed=not issues,
         detail=detail,
         notes=issues,
@@ -431,7 +563,7 @@ def _check_preset_metadata(engine: Engine, snapshot: SchemaSnapshot) -> CheckRes
 
 
 CHECKS: list[tuple[str, Callable[[Engine, SchemaSnapshot], CheckResult]]] = [
-    ("表清单符合单表模型", _check_table_inventory),
+    ("标准模型表清单（原始层 + 服务层，无历史派生维表）", _check_table_inventory),
     ("列清单与顺序与 DDL 一致", _check_column_list),
     ("列类型与 DDL 一致且无 TEXT 列", _check_column_types),
     ("主键与 grain 唯一性", _check_primary_key),
@@ -439,7 +571,9 @@ CHECKS: list[tuple[str, Callable[[Engine, SchemaSnapshot], CheckResult]]] = [
     ("行数与数值保真（转换未静默归零）", _check_row_parity_and_fidelity),
     ("数值排序回归（MIN/MAX 与数值语义一致）", _check_numeric_sorting),
     ("每个列都有 COMMENT", _check_comments),
-    ("preset_metadata 不引用不存在的表或列", _check_preset_metadata),
+    ("发现模式（扫描全库 + 排除系统表与原始层）", _check_discovery_mode),
+    ("字段映射（ANALYSIS_MAPPING）", _check_mapping),
+    ("兜底说明不引用不存在的表或列", _check_preset_metadata),
 ]
 
 

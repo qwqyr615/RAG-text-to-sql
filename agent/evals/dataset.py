@@ -21,12 +21,20 @@ from typing import Iterable, Sequence
 from core.config import BASE_DIR
 from tools.sql_guard import extract_table_refs, validate_readonly_sql
 
-__all__ = ["CASES_FILE", "EvalCase", "load_cases", "validate_cases"]
+__all__ = [
+    "CASES_FILE",
+    "EvalCase",
+    "load_cases",
+    "resolve_allowed_tables",
+    "validate_cases",
+]
 
 CASES_FILE = BASE_DIR / "evals" / "cases.jsonl"
 
-#: 评测唯一允许出现的业务表（单表宽表模型）
-ALLOWED_TABLES = ("fact_production_record",)
+#: 没有映射可用时的兜底表清单（标准服务层）。
+#: 正常情况下允许的表由 :func:`resolve_allowed_tables` 从**发现模式**取得 ——
+#: 客户库的表名不该写在这份代码里。
+DEFAULT_ALLOWED_TABLES = ("fact_production_record",)
 
 
 @dataclass(frozen=True)
@@ -75,13 +83,49 @@ def load_cases(path: Path | None = None) -> list[EvalCase]:
     return cases
 
 
+def resolve_allowed_tables(mapping_path: str | Path | None = None) -> tuple[str, ...]:
+    """允许出现在参照 SQL 里的表：来自发现模式（扫描 + 排除 + 映射）。
+
+    为什么不让调用方传一个常量列表：参照 SQL 的表名取决于当前接的是哪个数据源，
+    写死在代码里就意味着「换一张表」时必须改代码 —— 正是本次要消除的东西。
+    发现过程失败时退回 :data:`DEFAULT_ALLOWED_TABLES`，保证离线跑校验不会崩。
+    """
+    try:
+        from metadata.mapping import resolve_mapping
+        from metadata.metadata_service import get_metadata_json
+    except Exception:  # pragma: no cover - 依赖缺失时走兜底
+        return DEFAULT_ALLOWED_TABLES
+
+    try:
+        mapping = resolve_mapping(mapping_path, use_cache=False)
+        metadata = get_metadata_json(mapping=mapping, use_mapping_cache=False)
+    except Exception:  # noqa: BLE001 - 连不上库时不该让用例校验失败
+        return DEFAULT_ALLOWED_TABLES
+
+    tables = tuple(
+        str(table.get("table_name"))
+        for table in metadata.get("tables") or []
+        if table.get("table_name")
+    )
+    return tables or DEFAULT_ALLOWED_TABLES
+
+
 def validate_cases(
-    cases: Sequence[EvalCase], *, allowed_tables: Iterable[str] = ALLOWED_TABLES
+    cases: Sequence[EvalCase], *, allowed_tables: Iterable[str] | None = None
 ) -> list[str]:
-    """校验用例集，返回问题列表（空表示通过）。"""
+    """校验用例集，返回问题列表（空表示通过）。
+
+    ``allowed_tables`` 显式传 ``None`` 时会**现场解析**（发现模式），
+    这样客户侧用例集（表名 ``mes_prod_log``）也能通过校验，不需要改代码。
+    """
     problems: list[str] = []
     seen_ids: set[str] = set()
-    allowed = {name.lower() for name in allowed_tables}
+    allowed = {
+        name.lower()
+        for name in (
+            allowed_tables if allowed_tables is not None else resolve_allowed_tables()
+        )
+    }
 
     for index, case in enumerate(cases, start=1):
         label = case.case_id or f"#{index}"

@@ -10,9 +10,15 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Sequence
 
-from core.metrics import BUSINESS_METRICS, resolve_metrics
+from core.metrics import (
+    BUSINESS_METRICS,
+    resolve_metrics,
+    resolve_metrics_from_field_map,
+)
+from metadata.mapping.columns import ColumnRewriter, find_identifiers
+from metadata.standard_fields import STANDARD_FIELDS
 from prompt.base import PromptContext, PromptSection, PromptSectionProvider
-from prompt.budget import pack_blocks, relevance_score, sort_by_relevance
+from prompt.budget import pack_blocks, relevance_score, sort_by_relevance, truncate_text
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +31,7 @@ __all__ = [
 
 
 class DataResourceProvider(PromptSectionProvider):
-    """元数据段：表、字段、样例值、表间关系。
+    """元数据段：表、字段、样例值、表间关系，以及**标准字段口径映射**。
 
     裁剪策略：
 
@@ -34,6 +40,9 @@ class DataResourceProvider(PromptSectionProvider):
     - 每张表内的字段同样按相关性排序，只展示前 ``max_columns_per_table`` 个，
       其余折叠并提示模型用 ``sql_db_schema`` 查看完整结构；
     - 样例值只给相关性最高的 ``sample_value_tables`` 张表，因为样例值最吃预算；
+    - 用到字段映射时，额外插入一个「标准字段口径」块，把
+      「业务词 -> 客户列 -> 必须写的表达式」讲清楚（含单位换算）。
+      没有映射时该块不出现，行为与原先完全一致；
     - 尾块体积小、价值高，保证出现（``keep_last``）：有表间关系时输出关系，
       单表模型下改为输出「不要生成 JOIN」的提示。
     """
@@ -50,12 +59,14 @@ class DataResourceProvider(PromptSectionProvider):
         min_tables: int = 3,
         max_columns_per_table: int = 25,
         sample_value_tables: int = 2,
+        field_map_budget: int = 900,
         enabled: bool = True,
     ) -> None:
         super().__init__(max_chars, enabled=enabled)
         self.min_tables = max(0, int(min_tables))
         self.max_columns_per_table = max(1, int(max_columns_per_table))
         self.sample_value_tables = max(0, int(sample_value_tables))
+        self.field_map_budget = max(0, int(field_map_budget))
 
     def build(self, context: PromptContext, budget: int) -> PromptSection:
         tables = list(context.metadata_json.get("tables") or [])
@@ -78,6 +89,11 @@ class DataResourceProvider(PromptSectionProvider):
             )
             for rank, table in enumerate(ordered)
         ]
+
+        # 标准字段口径块：有映射时才插入
+        field_map_block = self._format_field_map(context)
+        if field_map_block:
+            blocks.append(field_map_block)
 
         # 尾块保证出现（keep_last）：有表间关系时输出关系；单表模型下改为
         # 「不要 JOIN」的提示，避免模型自己在冗余的维度编码上做自连接。
@@ -107,6 +123,66 @@ class DataResourceProvider(PromptSectionProvider):
             dropped_items=dropped,
             truncated=truncated,
         )
+
+    # ------------------------------------------------------------------
+    # 标准字段口径
+    # ------------------------------------------------------------------
+    def _format_field_map(self, context: PromptContext) -> str:
+        """渲染「标准字段 -> 客户列 -> 表达式」块。
+
+        这个块解决的是**跨命名体系**的问题：业务人员说「缺陷率」，客户库里叫
+        ``def_rate``，而且单位是比例（0.039）不是百分数（3.9）。只把表结构丢给模型，
+        它猜不准；把这个块给模型，它就知道该写 ``AVG(def_rate * 100)``。
+        """
+        field_map = context.metadata_json.get("field_map") or {}
+        if not field_map or self.field_map_budget <= 0:
+            return ""
+
+        lines: list[str] = [
+            "标准业务字段与当前数据源实际列的对应关系"
+            "（业务问题用的是标准字段名，生成 SQL 必须使用实际列名或给出的表达式）："
+        ]
+        conversions: list[str] = []
+
+        for table_name, items in field_map.items():
+            if not items:
+                continue
+            lines.append(f"[{table_name}]")
+            for item in items:
+                column = str(item.get("column") or "")
+                expression = str(item.get("expression") or column)
+                label = str(item.get("label") or "")
+                standard = str(item.get("standard_field") or "")
+
+                line = f"- {label}({standard}) -> 列 {column}"
+                if item.get("needs_conversion"):
+                    line += f"，SQL 必须写成 {expression}"
+                    conversions.append(
+                        f"- {label}：客户列 {column} × {item.get('scale')} "
+                        f"-> 写成 {expression}"
+                    )
+                unit = str(item.get("unit") or "")
+                customer_unit = str(item.get("customer_unit") or "")
+                if item.get("needs_conversion") and customer_unit:
+                    line += f"（客户单位 {customer_unit}，口径单位 {unit}）"
+                elif unit and unit != "—":
+                    line += f"（单位 {unit}）"
+                enum_values = item.get("enum_values") or []
+                if enum_values:
+                    line += f"；取值：{' / '.join(str(v) for v in enum_values)}"
+                lines.append(line)
+
+        if conversions:
+            lines.append("")
+            lines.append("需要单位换算的字段（漏掉换算会让结果整体差一个倍数）：")
+            lines.extend(conversions)
+
+        content = "\n".join(lines)
+        if len(content) > self.field_map_budget:
+            kept, _ = truncate_text(content, self.field_map_budget)
+            return kept
+        return content
+
 
     # ------------------------------------------------------------------
     # 排序
@@ -228,8 +304,15 @@ class DataResourceProvider(PromptSectionProvider):
 class MetricsProvider(PromptSectionProvider):
     """指标段：业务指标口径到真实字段的映射。
 
-    只输出能在当前数据源里匹配到字段的指标；匹配不到的指标单独提示「当前数据源无
-    该字段」，防止模型按业务别名臆造列名。条目按与问题的相关性排序。
+    两条数据来源，优先用前者：
+
+    1. ``metadata_json["field_map"]`` —— 由 ``mapping.yaml`` 编译而来，**人审过**，
+       还带单位换算表达式，于是能直接告诉模型「缺陷率要写 ``AVG(def_rate * 100)``」；
+    2. 没有映射时退回 ``core.metrics.resolve_metrics`` 的启发式匹配（按标准候选字段名
+       撞实际列名），也就是本项目原先的行为。
+
+    匹配不到的指标单独提示「当前数据源无该字段」，防止模型按业务别名臆造列名。
+    条目按与问题的相关性排序。
     """
 
     name = "metrics"
@@ -239,8 +322,20 @@ class MetricsProvider(PromptSectionProvider):
 
     def build(self, context: PromptContext, budget: int) -> PromptSection:
         field_to_table = self._field_to_table(context)
+        mapped = self._mapped_metrics(context)
 
-        if context.available_columns:
+        if mapped is not None:
+            metrics = mapped
+            if not metrics:
+                return PromptSection(
+                    name=self.name,
+                    title=self.title,
+                    content=(
+                        "当前数据源未匹配到预置业务指标字段，"
+                        "请严格按真实表结构分析，不要按业务别名猜测列名。"
+                    ),
+                )
+        elif context.available_columns:
             metrics = resolve_metrics(context.available_columns)
             if not metrics:
                 return PromptSection(
@@ -274,6 +369,21 @@ class MetricsProvider(PromptSectionProvider):
         )
 
     @staticmethod
+    def _mapped_metrics(context: PromptContext) -> list[dict[str, Any]] | None:
+        """从字段映射解析指标；没有映射信息时返回 ``None`` 表示「请走旧路径」。"""
+        field_map = context.metadata_json.get("field_map")
+        if not field_map:
+            return None
+        # 映射里显式算好的指标优先（含最终表达式）
+        precomputed = context.metadata_json.get("metric_bindings")
+        if precomputed:
+            return list(precomputed)
+        flattened: list[dict[str, Any]] = []
+        for items in field_map.values():
+            flattened.extend(items or [])
+        return resolve_metrics_from_field_map(flattened)
+
+    @staticmethod
     def _field_to_table(context: PromptContext) -> dict[str, str]:
         mapping: dict[str, str] = {}
         for table in context.metadata_json.get("tables") or []:
@@ -286,16 +396,19 @@ class MetricsProvider(PromptSectionProvider):
     def _format_metric(metric: dict[str, Any], field_to_table: dict[str, str]) -> str:
         candidates = list(metric.get("candidate_fields") or [])
         field = str(metric.get("field") or (candidates[0] if candidates else ""))
-        table = field_to_table.get(field, "")
+        expression = str(metric.get("expression") or field)
+        table = str(metric.get("table") or field_to_table.get(field, ""))
         location = f"{table}.{field}" if table else field
 
         aliases = "、".join(metric.get("aliases") or [])
-        calculation = str(metric.get("calculation") or "").replace("{field}", field)
+        calculation = str(metric.get("calculation") or "").replace("{field}", expression)
 
         lines = [f"- {metric.get('name', '')}"]
         if aliases:
             lines.append(f"  业务别名：{aliases}")
         lines.append(f"  当前数据源字段：{location}")
+        if metric.get("needs_conversion"):
+            lines.append(f"  SQL 表达式：{expression}（已含单位换算，必须照写）")
         description = str(metric.get("description") or "").strip()
         if description:
             lines.append(f"  含义：{description}")
@@ -382,6 +495,13 @@ class KnowledgeProvider(PromptSectionProvider):
 class RagExampleProvider(PromptSectionProvider):
     """RAG 段：相似问题 + 历史 SQL 示例。
 
+    **示例改写**：示例库里的 SQL 是按标准字段写的（``AVG(defect_rate)``）。当数据源是
+    客户表（列名 ``def_rate``）时，原样注入会诱导模型编出不存在的列名 —— 示例从帮助
+    变成污染源。因此有字段映射时先经 :class:`~metadata.mapping.columns.ColumnRewriter`
+    改写，示例立刻变成「在这张客户表上正确可执行」的示范。
+
+    其余行为：
+
     - 检索失败（Milvus / 嵌入服务不可用）时输出空段，不影响主流程；
     - 低于 ``min_score`` 的示例直接丢弃，避免不相似示例污染 Prompt；
     - 超出预算时丢弃相似度最低的示例；
@@ -411,12 +531,16 @@ class RagExampleProvider(PromptSectionProvider):
 
     def build(self, context: PromptContext, budget: int) -> PromptSection:
         examples = self._search(context.question)
-        self.last_examples = examples
-        if not examples:
+        rewritten = self._rewrite_for_source(context, examples)
+        self.last_examples = rewritten
+        if not rewritten:
             return PromptSection(name=self.name, title=self.title, content="")
 
         keywords = context.keywords()
-        blocks = [self._format_example(index, example) for index, example in enumerate(examples, start=1)]
+        blocks = [
+            self._format_example(index, example)
+            for index, example in enumerate(rewritten, start=1)
+        ]
         # 相似度已由检索层排好序；同一相似度时用关键词相关性做二次排序
         ordered = sort_by_relevance(blocks, lambda block: block, keywords)
 
@@ -435,6 +559,73 @@ class RagExampleProvider(PromptSectionProvider):
             dropped_items=dropped,
             truncated=truncated,
         )
+
+    # ------------------------------------------------------------------
+    # 按当前数据源改写示例
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _rewrite_for_source(
+        context: PromptContext, examples: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """把示例 SQL 从标准字段口径改写成当前数据源口径。
+
+        没有字段映射时原样返回（标准模型下示例本来就是对的）。
+        改写后**丢弃**依然引用未映射字段的示例：与其给模型一个跑不通的例子，
+        不如不给 —— 它在客户表上会直接报 Unknown column。
+        """
+        field_map = context.metadata_json.get("field_map") or {}
+        if not field_map:
+            return examples
+
+        tables = list(context.metadata_json.get("tables") or [])
+        if not tables:
+            return examples
+
+        # 目标表：优先 fact 角色，否则第一张
+        target = ""
+        for table in tables:
+            if str(table.get("role") or "") == "fact":
+                target = str(table.get("table_name") or "")
+                break
+        if not target:
+            target = str(tables[0].get("table_name") or "")
+        if not target:
+            return examples
+
+        replacements: dict[str, str] = {}
+        reverse: dict[str, list[str]] = {}
+        for item in field_map.get(target) or []:
+            standard = str(item.get("standard_field") or "")
+            expression = str(item.get("expression") or item.get("column") or "")
+            if standard and expression:
+                replacements[standard] = expression
+            column = str(item.get("column") or "")
+            if column and standard:
+                reverse.setdefault(column, []).append(standard)
+
+        if not replacements:
+            return examples
+
+        rewriter = ColumnRewriter(replacements, reverse=reverse)
+        mapped_standards = set(replacements)
+        all_standards = {field.name for field in STANDARD_FIELDS}
+        unmapped = all_standards - mapped_standards
+
+        result: list[dict[str, Any]] = []
+        for example in examples:
+            sql = str(example.get("sql") or "")
+            rewritten = rewriter.rewrite(sql)
+            # 改写后仍带未映射标准字段 -> 该示例在当前数据源上不可执行，丢弃
+            if find_identifiers(rewritten.sql, unmapped):
+                logger.debug("丢弃与当前数据源不兼容的 RAG 示例：%s", example.get("question"))
+                continue
+            if rewritten.changed:
+                example = {**example, "sql": rewritten.sql, "rewritten": True}
+            else:
+                example = dict(example)
+            example["tables"] = target
+            result.append(example)
+        return result
 
     # ------------------------------------------------------------------
     # 检索

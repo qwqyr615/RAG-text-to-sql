@@ -1,50 +1,30 @@
-"""业务指标口径定义。"""
+"""业务指标口径定义。
+
+口径的**唯一来源**是 :mod:`metadata.standard_fields` 的 ``STANDARD_METRICS``，
+本模块是它在 Prompt 层的适配器：
+
+- :func:`resolve_metrics` —— 无映射时的启发式匹配（按候选字段名撞实际列名）；
+- :func:`resolve_metrics_from_field_map` —— 有映射时按人审过的字段口径解析，
+  并带上单位换算表达式。
+
+两条路径返回同构的 dict，``MetricsProvider`` 因此不需要关心数据源是标准模型
+还是客户映射。
+"""
 
 from typing import Iterable
 
+from metadata.standard_fields import STANDARD_METRICS
+
+#: 业务指标口径。历史上是手写列表，现在从标准字段词典派生，避免两处维护漂移。
 BUSINESS_METRICS = [
     {
-        "name": "缺陷率",
-        "aliases": ["不良率", "缺陷比例", "defect rate", "defect ratio"],
-        "candidate_fields": ["defect_rate", "defective_rate", "defect_ratio", "bad_rate", "defect_percent"],
-        "description": "反映生产质量缺陷水平，数值越高表示质量越差。",
-        "calculation": "统计平均值可用 AVG({field})，按产线/产品/班次/设备分组时配合 GROUP BY 使用。",
-    },
-    {
-        "name": "良率 / 直通率",
-        "aliases": ["良率", "直通率", "first pass yield", "fpy"],
-        "candidate_fields": ["first_pass_yield", "yield_rate", "pass_rate", "fpy"],
-        "description": "反映产品一次性通过生产/检验的比例，数值越高表示良率越好。",
-        "calculation": "统计平均值可用 AVG({field})，数值越高越好。",
-    },
-    {
-        "name": "质量得分",
-        "aliases": ["质量分", "quality score"],
-        "candidate_fields": ["quality_score", "quality_index", "quality_grade_score"],
-        "description": "反映综合质量水平，数值越高表示质量越好。",
-        "calculation": "可直接使用 {field}，例如 AVG({field}) 或 MIN({field})。",
-    },
-    {
-        "name": "停机时长",
-        "aliases": ["停机时间", "设备停机", "downtime"],
-        "candidate_fields": ["downtime_minutes", "downtime", "down_time", "equipment_downtime", "stop_minutes"],
-        "description": "反映设备停机时间，单位通常是分钟；数值越高表示停机越严重。",
-        "calculation": "统计总停机时长可用 SUM({field})，平均可用 AVG({field})。",
-    },
-    {
-        "name": "故障次数",
-        "aliases": ["故障事件数", "异常次数", "fault count"],
-        "candidate_fields": ["fault_event_count", "fault_count", "alarm_count", "failure_count", "error_count"],
-        "description": "反映设备或批次发生的故障/异常事件次数。",
-        "calculation": "统计总和可用 SUM({field})。",
-    },
-    {
-        "name": "产量",
-        "aliases": ["生产量", "产出量", "production volume"],
-        "candidate_fields": ["production_volume", "output_quantity", "quantity", "product_qty", "yield_qty"],
-        "description": "反映生产数量，数值越高表示产出越多。",
-        "calculation": "统计趋势可用 SUM({field}) 并按时间/产线/班次分组。",
-    },
+        "name": metric.name,
+        "aliases": list(metric.aliases),
+        "candidate_fields": [metric.standard_field],
+        "description": metric.description,
+        "calculation": metric.calculation,
+    }
+    for metric in STANDARD_METRICS
 ]
 
 
@@ -78,6 +58,45 @@ def resolve_metrics(columns: Iterable[str]) -> list[dict]:
                 resolved.append({**metric, "field": actual_field})
                 break
 
+    return resolved
+
+
+def resolve_metrics_from_field_map(
+    field_map: Iterable[dict] | None,
+) -> list[dict]:
+    """从 ``mapping.yaml`` 编译出的字段口径解析业务指标。
+
+    与 :func:`resolve_metrics` 的区别：后者是「按标准候选字段名去撞客户列名」的
+    启发式匹配，本函数用的是**人审过的映射**，因此还能带上单位换算表达式。
+
+    返回的每条指标都带 ``expression``（客户侧真实写法，可能是 ``def_rate * 100``）
+    与 ``needs_conversion`` 标记，供 Prompt 直接展示「要算这个指标就写这个表达式」。
+    """
+    if not field_map:
+        return []
+
+    by_standard: dict[str, dict] = {}
+    for item in field_map:
+        standard = str(item.get("standard_field") or "")
+        if standard:
+            by_standard.setdefault(standard, item)
+
+    resolved: list[dict] = []
+    for metric in BUSINESS_METRICS:
+        for candidate in metric["candidate_fields"]:
+            item = by_standard.get(candidate)
+            if item is None:
+                continue
+            expression = str(item.get("expression") or item.get("column") or "")
+            resolved.append(
+                {
+                    **metric,
+                    "field": str(item.get("column") or expression),
+                    "expression": expression,
+                    "needs_conversion": bool(item.get("needs_conversion")),
+                }
+            )
+            break
     return resolved
 
 

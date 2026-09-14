@@ -1,9 +1,9 @@
-"""消融实验运行器：RAG 开/关 × 指标段 开/关。
+"""消融实验运行器。
 
-判定标准与常见 text-to-SQL 评测一致——**执行结果一致率（execution accuracy）**：
-把模型生成的 SQL 与人工参照 SQL 都真正执行一遍，比较结果集。
+两条实验轴
+----------
 
-四个配置：
+**轴 1：RAG 段 × 指标段**（原有）
 
 ===============  ========  ==========
 配置               RAG 段    指标段
@@ -13,10 +13,26 @@ rag_on+metrics_on    开        开
 rag_off+metrics_off  关        关
 rag_on+metrics_off   开        关
 ===============  ========  ==========
+
+**轴 2：字段映射**（新增，「换一张表」对照）
+
+``+mapping_on`` / ``+mapping_off`` 控制是否加载 ``mapping.yaml``：
+
+- ``mapping_off``：只用数据库里能读到的列名与 ``COMMENT``（本次客户表 45 列
+  **注释全空**，所以模型只能靠缩写列名硬猜）；
+- ``mapping_on``：注入人审过的「标准字段 ↔ 客户列」口径，含单位换算指令，
+  并把 RAG 示例 SQL 改写成客户列口径。
+
+两个配置跑同一张客户表、同一套用例，差值就是**映射这一层的净增益**。
+
+判定标准与常见 text-to-SQL 评测一致——**执行结果一致率（execution accuracy）**：
+把模型生成的 SQL 与人工参照 SQL 都真正执行一遍，比较结果集。
 """
 
 from __future__ import annotations
 
+import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol, Sequence
@@ -33,11 +49,14 @@ from prompt.providers import (
 from schemas.agent_io import AgentQuestion
 from tools.sql_executor import execute_sql
 
+logger = logging.getLogger(__name__)
+
 __all__ = [
     "DEFAULT_CONFIG_NAMES",
     "CaseOutcome",
     "ConfigOutcome",
     "EvalConfig",
+    "build_agent_metadata",
     "build_prompt_builder",
     "collect_reference_results",
     "default_agent_factory",
@@ -56,6 +75,10 @@ DEFAULT_CONFIG_NAMES: tuple[str, ...] = (
 #: 数值比较容差（相对值）。聚合函数的浮点尾差不应被算作错误。
 TOLERANCE = 1e-3
 
+#: 环境变量名，由 ``eval_spec`` 在装配 Agent 前设置，使 ``Text2SQLAgent``
+#: 内部调用 ``get_metadata_json()`` 时读到同一份映射。
+MAPPING_ENV = "ANALYSIS_MAPPING"
+
 
 class AnsweringAgent(Protocol):
     """评测只依赖这一个方法，便于注入假 Agent 做单测。"""
@@ -68,18 +91,30 @@ class AnsweringAgent(Protocol):
 # ----------------------------------------------------------------------
 @dataclass(frozen=True)
 class EvalConfig:
-    """一个消融配置。"""
+    """一个消融配置。
+
+    ``mapping`` 为三态：
+
+    - ``True``：显式启用字段映射（名字里带 ``+mapping_on``）；
+    - ``False``：显式关闭（名字里带 ``+mapping_off``）；
+    - ``None``：不参与映射维度，沿用环境里 ``ANALYSIS_MAPPING`` 的配置。
+
+    三态是必要的：原本的四配置矩阵不应该因为新增了映射维度就改名，
+    否则既有报告与历史数字无法对照。
+    """
 
     name: str
     rag: bool
     metrics: bool
+    mapping: bool | None = None
 
     @classmethod
     def parse(cls, text: str) -> "EvalConfig":
-        """从 ``rag_off+metrics_on`` 这类写法解析配置。"""
+        """从 ``rag_off+metrics_on+mapping_on`` 这类写法解析配置。"""
         normalized = text.strip().lower().replace(" ", "")
         rag = True
         metrics = True
+        mapping: bool | None = None
         for token in normalized.split("+"):
             if token in {"rag_on", "rag", "rag=true"}:
                 rag = True
@@ -89,13 +124,60 @@ class EvalConfig:
                 metrics = True
             elif token in {"metrics_off", "no_metrics", "metrics=false"}:
                 metrics = False
+            elif token in {"mapping_on", "mapping", "mapping=true"}:
+                mapping = True
+            elif token in {"mapping_off", "no_mapping", "mapping=false"}:
+                mapping = False
             else:
                 raise ValueError(f"无法识别的配置项：{token}")
-        return cls(
-            name=f"rag_{'on' if rag else 'off'}+metrics_{'on' if metrics else 'off'}",
-            rag=rag,
-            metrics=metrics,
-        )
+
+        name = f"rag_{'on' if rag else 'off'}+metrics_{'on' if metrics else 'off'}"
+        if mapping is not None:
+            name += f"+mapping_{'on' if mapping else 'off'}"
+        return cls(name=name, rag=rag, metrics=metrics, mapping=mapping)
+
+
+def build_agent_metadata(config: EvalConfig) -> dict[str, Any]:
+    """按配置装配元数据 JSON（发现 + 映射）。
+
+    ``mapping`` 为 ``None`` 时沿用环境配置；否则显式传/不传映射文件，
+    保证配置名与实际生效的映射一致 —— 否则报告里的 ``mapping_on`` 可能名不副实。
+    """
+    from metadata.mapping import default_mapping_path, resolve_mapping
+    from metadata.metadata_service import get_metadata_json
+
+    # 三态到「映射文件路径」的映射
+    if config.mapping is None:
+        explicit_path: str | os.PathLike[str] | None = default_mapping_path()
+    elif config.mapping:
+        explicit_path = _default_profile_path()
+    else:
+        explicit_path = None
+
+    mapping = resolve_mapping(explicit_path, use_cache=False) if explicit_path else None
+    return get_metadata_json(mapping=mapping)
+
+
+def _default_profile_path() -> str | None:
+    """``mapping_on`` 在没显式指定时用哪个映射文件。
+
+    优先 ``ANALYSIS_MAPPING``；没配就用仓库里的第一个 ``mappings/*.mapping.yaml``。
+    单表数据集下这是安全的（只有一份映射可选）。
+    """
+    configured = os.environ.get(MAPPING_ENV) or getattr(settings, "analysis_mapping", "")
+    if str(configured).strip() and str(configured).strip().lower() not in {
+        "",
+        "none",
+        "off",
+        "false",
+        "0",
+    }:
+        return str(configured)
+
+    from core.config import BASE_DIR
+
+    candidates = sorted((BASE_DIR / "mappings").glob("*.mapping.yaml"))
+    return str(candidates[0]) if candidates else None
 
 
 def build_prompt_builder(config: EvalConfig) -> SQLAgentPromptBuilder:
@@ -107,6 +189,7 @@ def build_prompt_builder(config: EvalConfig) -> SQLAgentPromptBuilder:
                 min_tables=settings.prompt_metadata_min_tables,
                 max_columns_per_table=settings.sql_max_columns_per_table,
                 sample_value_tables=settings.prompt_metadata_sample_tables,
+                field_map_budget=settings.prompt_field_map_budget,
             ),
             MetricsProvider(settings.prompt_metrics_budget, enabled=config.metrics),
             KnowledgeProvider(settings.prompt_knowledge_budget),
@@ -125,11 +208,16 @@ def default_agent_factory(config: EvalConfig) -> Any:
     """默认 Agent 工厂：真实 DeepSeek + 真实库，逐例独立会话。
 
     ``verbose=False``：评测要的是干净的进度输出，不需要 LangChain 的中间步骤。
+
+    元数据**由本工厂显式注入**，而不是让 Agent 自己去读 —— 这样 ``mapping_on``
+    与 ``mapping_off`` 两个配置的差异严格等于映射本身，不会混进缓存或环境变量
+    的时序问题。
     """
     from agents.text2sql_agent import Text2SQLAgent
     from sessions import InMemorySessionStore
 
     return Text2SQLAgent(
+        metadata_json=build_agent_metadata(config),
         prompt_builder=build_prompt_builder(config),
         session_store=InMemorySessionStore(max_turns=0),
         verbose=False,

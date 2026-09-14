@@ -1,25 +1,44 @@
-"""预置数据底座元数据说明（路线 B：单表宽表模型）。
+"""标准数据底座的遗留说明（单表宽表模型，路线 B）。
 
-- ``PRESET_BUSINESS_TABLES``：Agent 可见的业务表白名单。单表模型下只有服务层
-  ``fact_production_record``；原始层 ``intelligent_production_iiot`` 不暴露给 Agent。
-- ``TABLE_DESCRIPTIONS`` / ``COLUMN_DESCRIPTIONS``：人工维护的说明，仅作**兜底**——
-  运行时优先使用 DDL 里的 ``COMMENT``（见 metadata/metadata_service.py）。
-  两份说明若冲突，以 ``sql/02_create_fact_production_record.sql`` 为准。
-- ``RELATIONSHIPS``：单表模型下为空。原先这里声明了 4 条 ``fact -> dim_*`` 关系，
-  但那 4 张派生维表已删除，且这类关系在宽表里本就是冗余的（实测 JOIN 前后行数与取值
-  完全相同）。若将来切回星型模型（路线 A），再在这里补充真正有意义的关系。
+**本模块不再持有业务表白名单。** 原先这里的 ``PRESET_BUSINESS_TABLES =
+["fact_production_record"]`` 是硬编码的 Agent 可见表白名单，换一张客户表就必须改代码。
+现在表范围由**发现模式**决定（``metadata/inventory.py``：扫描全库 + 排除规则），
+字段口径由**映射**决定（``mapping.yaml`` -> ``metadata/mapping/``）。
 
-字段类型、字段列表、样例值由 metadata_service 从数据库动态读取。
-详见 docs/DATA_MODEL.md
+保留下来的两样东西，只有在「没有配置映射」时才会被用到：
+
+- ``TABLE_DESCRIPTIONS`` / ``COLUMN_DESCRIPTIONS``：人工维护的说明，作为
+  数据库列 ``COMMENT`` 读不到时的兜底；
+- ``RELATIONSHIPS``：内置表间关系（单表模型下为空）。
+
+字段说明的完整优先级见 ``metadata/metadata_service.py``：
+**mapping.yaml > 列 COMMENT > 本模块兜底**。
+
+关于原始层
+----------
+``intelligent_production_iiot`` 是 CSV 导入的原样数据，字段类型未经治理（11 个数值
+指标以 TEXT 存储，排序按字典序）。它必须对 Agent 不可见，否则模型可能选到脏类型
+那张表而静默算错 —— 实测证据见 ``docs/DATA_MODEL.md``。排除规则写在
+``mapping.yaml`` 的 ``discovery.exclude`` 里，不再写死在代码中。
 """
 
-# 预置业务表范围：单表模型，只暴露服务层
-PRESET_BUSINESS_TABLES = [
-    "fact_production_record",
+from __future__ import annotations
+
+from typing import Any
+
+__all__ = [
+    "RELATIONSHIPS",
+    "TABLE_DESCRIPTIONS",
+    "COLUMN_DESCRIPTIONS",
+    "get_column_description",
 ]
 
-# 表说明（兜底，运行时优先读表级 COMMENT）
-TABLE_DESCRIPTIONS = {
+#: 标准服务层表名。仅用于「未配置映射」时的默认行为与健康检查，
+#: **不是** Agent 可见表白名单 —— 那由发现模式决定。
+STANDARD_SERVICE_TABLE = "fact_production_record"
+
+#: 表说明（兜底，运行时优先读映射的 description，其次读表级 COMMENT）
+TABLE_DESCRIPTIONS: dict[str, str] = {
     "fact_production_record": (
         "生产记录事实宽表，单表模型的服务层，一行代表一次生产运行，"
         "含维度编码与全部质量设备产量指标。"
@@ -29,8 +48,8 @@ TABLE_DESCRIPTIONS = {
     ),
 }
 
-# 字段说明（兜底，运行时优先读列级 COMMENT）
-COLUMN_DESCRIPTIONS = {
+#: 字段说明（兜底，运行时优先读映射口径，其次读列级 COMMENT）
+COLUMN_DESCRIPTIONS: dict[str, str] = {
     "fact_production_record.record_id": "生产记录主键，一行代表一次生产运行。",
     "fact_production_record.machine_id": "设备编码，例如 M01。",
     "fact_production_record.production_line": "生产线编码，例如 Line_A。",
@@ -62,8 +81,8 @@ COLUMN_DESCRIPTIONS = {
     "fact_production_record.benefit_score": "综合效益得分。",
 }
 
-# 表间关系：单表模型下为空
-RELATIONSHIPS: list[dict[str, str]] = []
+#: 表间关系：单表模型下为空。多表客户库的关系写在 mapping.yaml 的 relationships 段。
+RELATIONSHIPS: list[dict[str, Any]] = []
 
 
 def get_column_description(table_name: str, column_name: str) -> str:
