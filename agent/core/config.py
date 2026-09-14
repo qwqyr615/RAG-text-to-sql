@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     llm_model: str = "deepseek-chat"
     llm_temperature: float = 0.1
     llm_max_tokens: int = 4096
-    llm_timeout: int = 60
+    llm_timeout: int = 120
 
     # ========== 数据库配置 ==========
     database_url: str = f"sqlite:///{(BASE_DIR / 'data' / 'agent.db').as_posix()}"
@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     # ========== SiliconFlow 嵌入模型配置 ==========
     siliconflow_api_key: str = ""
     siliconflow_base_url: str = "https://api.siliconflow.cn/v1"
-    siliconflow_embedding_model: str = "BAAI/bge-m3"
+    siliconflow_embedding_model: str = "Qwen/Qwen3-VL-Embedding-8B"
 
     # ========== Milvus RAG 配置 ==========
     milvus_uri: str = "http://localhost:19530"

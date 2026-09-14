@@ -30,6 +30,33 @@ def load_examples() -> list[dict[str, Any]]:
     return json.loads(EXAMPLE_FILE.read_text(encoding="utf-8"))
 
 
+def _write_examples(client, examples: list[dict[str, Any]]) -> int:
+    """把示例向量化并写入集合。"""
+    questions = [example["question"] for example in examples]
+    vectors = get_embedding_model().embed_documents(questions)
+
+    data = []
+    for example, vector in zip(examples, vectors):
+        data.append(
+            {
+                PK_FIELD: example["id"],
+                VECTOR_FIELD: vector,
+                "question": example["question"],
+                "sql": example["sql"],
+                "metrics": "、".join(example.get("metrics", [])),
+                "tables": "、".join(example.get("tables", [])),
+                "description": example.get("description", ""),
+            }
+        )
+
+    client.insert(
+        collection_name=settings.milvus_collection_name,
+        data=data,
+    )
+    client.flush(settings.milvus_collection_name)
+    return len(data)
+
+
 def ingest_sql_examples(drop_old: bool = True) -> int:
     """把示例问题写入 Milvus。"""
     examples = load_examples()
@@ -39,32 +66,20 @@ def ingest_sql_examples(drop_old: bool = True) -> int:
     client = get_client()
     try:
         ensure_collection(client, drop_old=drop_old)
-
-        questions = [example["question"] for example in examples]
-        vectors = get_embedding_model().embed_documents(questions)
-
-        data = []
-        for example, vector in zip(examples, vectors):
-            data.append(
-                {
-                    PK_FIELD: example["id"],
-                    VECTOR_FIELD: vector,
-                    "question": example["question"],
-                    "sql": example["sql"],
-                    "metrics": "、".join(example.get("metrics", [])),
-                    "tables": "、".join(example.get("tables", [])),
-                    "description": example.get("description", ""),
-                }
-            )
-
-        client.insert(
-            collection_name=settings.milvus_collection_name,
-            data=data,
-        )
-        client.flush(settings.milvus_collection_name)
-        return len(data)
+        return _write_examples(client, examples)
     finally:
         client.close()
+
+
+def _ensure_ready(client) -> None:
+    """确保集合可用；若集合因维度变化被重建，则用当前模型重新灌入示例。"""
+    rebuilt = ensure_collection(client, drop_old=False)
+    if not rebuilt:
+        return
+
+    examples = load_examples()
+    if examples:
+        _write_examples(client, examples)
 
 
 def search_sql_examples(question: str, k: int | None = None) -> list[dict[str, Any]]:
@@ -74,7 +89,7 @@ def search_sql_examples(question: str, k: int | None = None) -> list[dict[str, A
         if not client.has_collection(settings.milvus_collection_name):
             return []
 
-        ensure_collection(client, drop_old=False)
+        _ensure_ready(client)
         query_vector = get_embedding_model().embed_query(question)
         results = client.search(
             collection_name=settings.milvus_collection_name,

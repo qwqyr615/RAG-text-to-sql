@@ -8,12 +8,15 @@
 嵌入模型仍然使用 LangChain 的 OpenAIEmbeddings 接入 SiliconFlow。
 """
 
+import logging
 from functools import lru_cache
 
 from pymilvus import CollectionSchema, DataType, FieldSchema, MilvusClient
 
 from core.config import settings
 from rag.embeddings import get_embedding_model
+
+logger = logging.getLogger(__name__)
 
 # 集合字段
 PK_FIELD = "pk"
@@ -48,21 +51,66 @@ def get_embedding_dimension() -> int:
     return len(vector)
 
 
-def ensure_collection(client: MilvusClient, drop_old: bool = False) -> None:
-    """确保集合存在；drop_old=True 时先删除重建。"""
-    collection_name = settings.milvus_collection_name
+def get_collection_dimension(
+    client: MilvusClient,
+    collection_name: str | None = None,
+) -> int | None:
+    """读取已有集合中向量字段的实际维度；读不到时返回 None。"""
+    name = collection_name or settings.milvus_collection_name
+    try:
+        description = client.describe_collection(name)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("读取集合 %s 结构失败，跳过维度校验：%s", name, exc)
+        return None
 
-    if client.has_collection(collection_name) and drop_old:
-        client.drop_collection(collection_name)
+    for field in description.get("fields", []):
+        if field.get("name") != VECTOR_FIELD:
+            continue
+        dim = (field.get("params") or {}).get("dim")
+        return int(dim) if dim is not None else None
+    return None
+
+
+def ensure_collection(client: MilvusClient, drop_old: bool = False) -> bool:
+    """确保集合存在，且向量维度与当前嵌入模型一致。
+
+    返回 True 表示本次对集合做了重建（删除后按当前维度新建），
+    调用方据此决定是否需要重新灌入数据。
+
+    Milvus 的集合维度在建立后就固定了，如果更换了
+    SILICONFLOW_EMBEDDING_MODEL（例如 1024 维换到 4096 维），
+    旧集合不会自动适配，检索时会报
+    "vector dimension mismatch, expected vector size(byte) 4096, actual 16384"。
+    这里检测到维度不一致时自动删除旧集合并按新维度重建，避免持续报错。
+    """
+    collection_name = settings.milvus_collection_name
+    dimension = get_embedding_dimension()
+    rebuilt = False
+
+    if client.has_collection(collection_name):
+        existing_dimension = get_collection_dimension(client, collection_name)
+
+        if existing_dimension is not None and existing_dimension != dimension:
+            logger.warning(
+                "集合 %s 向量维度为 %s，当前嵌入模型维度为 %s，"
+                "自动删除旧集合并按新维度重建",
+                collection_name,
+                existing_dimension,
+                dimension,
+            )
+            client.drop_collection(collection_name)
+            rebuilt = True
+        elif drop_old:
+            client.drop_collection(collection_name)
+            rebuilt = True
 
     if client.has_collection(collection_name):
         try:
             client.load_collection(collection_name)
         except Exception:
             pass
-        return
+        return rebuilt
 
-    dimension = get_embedding_dimension()
     schema = CollectionSchema(
         fields=[
             FieldSchema(
@@ -97,3 +145,4 @@ def ensure_collection(client: MilvusClient, drop_old: bool = False) -> None:
         schema=schema,
         index_params=index_params,
     )
+    return rebuilt
