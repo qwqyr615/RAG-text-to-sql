@@ -1,5 +1,63 @@
-﻿# IDE
+# =====================
+# IDE
+# =====================
 .idea/
 .vscode/
 *.iml
 
+# =====================
+# Python
+# =====================
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# pytest 在受限环境下会留下随机命名的缓存目录（无权限访问，属噪音）
+pytest-cache-files-*/
+
+# =====================
+# Node / 前端
+# =====================
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+
+# =====================
+# Java / Maven
+# =====================
+target/
+*.class
+.mvn/
+!.mvn/wrapper/maven-wrapper.properties
+build/
+
+# =====================
+# 日志与数据
+# =====================
+logs/
+*.log
+agent/logs/*
+!agent/logs/.gitkeep
+
+# =====================
+# 环境变量与密钥
+# =====================
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# =====================
+# 会话落盘（含对话内容）
+# =====================
+agent/sessions/
