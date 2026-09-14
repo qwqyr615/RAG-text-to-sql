@@ -35,6 +35,41 @@ class Settings(BaseSettings):
     # SQL Agent 建表时提供给大模型的样例行数
     sql_sample_rows: int = 3
 
+    # ========== SQL 安全 ==========
+    # 只读引擎是否把数据库会话设为只读（MySQL/PostgreSQL/SQLite 支持）。
+    # SQL 层校验（tools/sql_guard）始终生效，这里是第二道防线。
+    db_readonly_session: bool = True
+    # 结果回放取数最多返回多少行，防止大结果撑爆前端
+    sql_result_row_limit: int = 200
+
+    # ========== SQL Agent 循环与工具预算 ==========
+    # 单次提问最多几轮「工具调用 → 观测 → 再决策」
+    sql_agent_max_iterations: int = 8
+    # 单次提问最长执行时间（秒），None 表示不限制
+    sql_agent_max_execution_time: float = 90.0
+    # 提示模型默认返回的行数上限（写入 system prompt 的 {top_k}）
+    sql_agent_top_k: int = 50
+    # 是否打印 LangChain Agent 的中间步骤
+    sql_agent_verbose: bool = True
+
+    # ========== Prompt 上下文预算（字符数）==========
+    # 四段上下文合计上限；超出后按段优先级回收
+    prompt_total_budget: int = 8000
+    # 元数据段：表 / 字段 / 样例值 / 表间关系
+    prompt_metadata_budget: int = 3000
+    # 指标段：业务指标口径 -> 字段映射
+    prompt_metrics_budget: int = 1500
+    # 知识段：分析主题 / 业务对象 / 指标规则
+    prompt_knowledge_budget: int = 1800
+    # RAG 段：相似问题与 SQL 示例
+    prompt_rag_budget: int = 1500
+    # 元数据段至少展示几张表（即使与问题相关性为 0）
+    prompt_metadata_min_tables: int = 3
+    # 元数据段给相关性最高的几张表附带样例值
+    prompt_metadata_sample_tables: int = 2
+    # 单张表最多展示多少个字段，其余提示模型用 sql_db_schema 查看
+    sql_max_columns_per_table: int = 25
+
     # ========== LangSmith 监控（可选）==========
     langsmith_tracing: bool = False
     langsmith_endpoint: str = ""
@@ -54,6 +89,9 @@ class Settings(BaseSettings):
     milvus_db_name: str = "rag_dev"
     milvus_collection_name: str = "doc"
     rag_top_k: int = 3
+    # 相似度低于该值的示例直接丢弃，避免不相似示例污染 Prompt（COSINE，越大越相似）
+    rag_min_score: float = 0.45
+
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
         env_file_encoding="utf-8",

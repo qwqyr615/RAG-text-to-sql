@@ -82,8 +82,19 @@ def _ensure_ready(client) -> None:
         _write_examples(client, examples)
 
 
-def search_sql_examples(question: str, k: int | None = None) -> list[dict[str, Any]]:
-    """检索与用户问题最相似的历史问题/SQL 示例。"""
+def search_sql_examples(
+    question: str,
+    k: int | None = None,
+    min_score: float | None = None,
+) -> list[dict[str, Any]]:
+    """检索与用户问题最相似的历史问题/SQL 示例。
+
+    参数:
+        question: 用户问题
+        k: 最多返回多少条
+        min_score: 相似度下限（COSINE，越大越相似）；低于该值的示例直接丢弃，
+                   避免不相似的示例污染 Prompt。None 表示不过滤。
+    """
     client = get_client()
     try:
         if not client.has_collection(settings.milvus_collection_name):
@@ -102,9 +113,26 @@ def search_sql_examples(question: str, k: int | None = None) -> list[dict[str, A
         examples: list[dict[str, Any]] = []
         for hit in results[0]:
             entity = hit.get("entity", {})
+            score = hit.get("distance")
+            if min_score is not None and score is not None:
+                try:
+                    if float(score) < float(min_score):
+                        continue
+                except (TypeError, ValueError):
+                    pass
+
             example = {field: entity.get(field, "") for field in TEXT_FIELDS}
-            example["score"] = hit.get("distance")
+            example["score"] = score
             examples.append(example)
+
+        examples.sort(key=lambda item: -_score_of(item))
         return examples
     finally:
         client.close()
+
+
+def _score_of(example: dict[str, Any]) -> float:
+    try:
+        return float(example.get("score") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
