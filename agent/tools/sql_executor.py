@@ -1,50 +1,40 @@
-"""SQL 执行工具。
+"""SQL 执行工具（Agent 完成后的结果回放取数）。
 
-目前只允许执行只读 SELECT，避免 Agent 对数据造成破坏。
+Agent 真正执行 SQL 的路径是 LangChain 的 ``sql_db_query`` 工具，见
+``tools/sql_database.ReadOnlySQLDatabase``；本模块负责在 Agent 给出 SQL 之后，再用
+只读引擎取一次**结构化结果**（列名 + 数据行）供前端展示——因为 LangChain 回灌给模型
+的观测结果是截断后的字符串，前端需要的是干净的表格数据。
+
+两条路径共用 ``tools/sql_guard`` 的同一套只读校验。
 """
 
-import re
+from __future__ import annotations
+
 from typing import Any
 
 from sqlalchemy import text
 
-from tools.database import get_engine
+from core.config import settings
+from tools.database import get_readonly_engine
+from tools.sql_guard import ReadOnlyViolation, validate_readonly_sql
+
+__all__ = ["execute_sql", "validate_readonly_sql", "ReadOnlyViolation"]
 
 
-def validate_readonly_sql(sql: str) -> str:
-    """简单校验 SQL 是否为只读查询。
-
-    后续可以替换成更严格的 SQL Parser 或数据库只读账号。
-    """
-    normalized = re.sub(r"--.*?$", "", sql, flags=re.MULTILINE)
-    normalized = re.sub(r"/\*.*?\*/", "", normalized, flags=re.DOTALL)
-    normalized = normalized.strip().rstrip(";").strip()
-
-    first_keyword = normalized.split(maxsplit=1)[0].upper() if normalized else ""
-    if first_keyword not in {"SELECT", "WITH"}:
-        raise ValueError("仅允许执行 SELECT 或只读 WITH 查询")
-
-    dangerous = re.findall(
-        r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE)\b",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if dangerous:
-        raise ValueError("检测到非只读 SQL 操作")
-
-    return normalized
-
-
-def execute_sql(sql: str, limit: int = 200) -> tuple[list[str], list[list[Any]]]:
-    """执行 SQL 并返回 (列名, 行数据)。
+def execute_sql(
+    sql: str, limit: int | None = None
+) -> tuple[list[str], list[list[Any]]]:
+    """执行只读 SQL 并返回 ``(列名, 行数据)``。
 
     参数:
-        sql: 只读 SELECT 语句
-        limit: 最多返回多少行，防止结果过大
+        sql: 只读 SELECT / WITH 语句；非只读语句会抛 ``ReadOnlyViolation``
+        limit: 最多返回多少行；默认取 ``settings.sql_result_row_limit``
     """
     readonly_sql = validate_readonly_sql(sql)
-    with get_engine().connect() as conn:
+    effective_limit = settings.sql_result_row_limit if limit is None else int(limit)
+
+    with get_readonly_engine().connect() as conn:
         result = conn.execute(text(readonly_sql))
         columns = list(result.keys())
-        rows = [list(row) for row in result.fetchmany(limit)]
+        rows = [list(row) for row in result.fetchmany(effective_limit)]
     return columns, rows
