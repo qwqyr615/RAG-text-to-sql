@@ -12,6 +12,7 @@
 
 import {
   ApiError,
+  type AlgorithmsPayload,
   type AnomalyRequest,
   type AnomalyResult,
   type ApiEnvelope,
@@ -29,6 +30,8 @@ import {
   type Relationship,
   type StandardField,
   type MetricBinding,
+  type TrainRequest,
+  type TrainResult,
 } from './types'
 
 const BASE = '/api/v1'
@@ -168,6 +171,12 @@ export const api = {
   /** 可用建模字段 */
   modelingFeatures: (role?: 'numeric') =>
     get<ModelingFeatures>(`/modeling/features${role ? `?role=${role}` : ''}`),
+
+  /** 支持的建模算法及元信息 */
+  modelingAlgorithms: () => get<AlgorithmsPayload>('/modeling/algorithms'),
+
+  /** 统一建模入口：决策树 / 随机森林 / 逻辑回归 / KMeans */
+  train: (request: TrainRequest) => post<TrainResult>('/modeling/train', request),
 }
 
 // ---------------------------------------------------------------------------

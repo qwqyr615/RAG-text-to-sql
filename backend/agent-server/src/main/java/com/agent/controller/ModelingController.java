@@ -2,6 +2,7 @@ package com.agent.controller;
 
 import com.agent.dto.AnomalyRequestDTO;
 import com.agent.dto.RegressionRequestDTO;
+import com.agent.dto.TrainRequestDTO;
 import com.agent.exception.BaseException;
 import com.agent.result.Result;
 import com.agent.service.AgentApiClient;
@@ -91,5 +92,61 @@ public class ModelingController {
     public Result<ModelingFeaturesVO> features(
             @RequestParam(value = "role", required = false) String role) {
         return agentApiClient.features(role);
+    }
+
+    /**
+     * 列出支持的建模算法及元信息。
+     *
+     * <p>前端据此渲染算法选择卡片与参数表单；新增算法只需在上游
+     * {@code ALGORITHM_CATALOG} 加一条，网关无需改动。
+     *
+     * @return {@code {algorithms:[{name,label,family,requires_target,params,...}], total, table}}
+     */
+    @GetMapping("/algorithms")
+    public Result<Map<String, Object>> algorithms() {
+        return agentApiClient.algorithms();
+    }
+
+    /**
+     * 统一建模入口：决策树 / 随机森林 / 逻辑回归 / KMeans。
+     *
+     * <p>与 {@code /anomaly}、{@code /regression} 的关系：后两者是早期为便于调试
+     * 单独开放的专用接口，本接口是统一入口，最终都调用上游同一批建模函数，
+     * 因此结果结构一致。
+     *
+     * @param request 建模请求
+     * @return 建模结果信封（字段随算法不同，用 Map 承接）
+     */
+    @PostMapping("/train")
+    public Result<Map<String, Object>> train(@RequestBody TrainRequestDTO request) {
+        if (request == null) {
+            throw new BaseException("请求体不能为空");
+        }
+        if (request.getAlgorithm() == null || request.getAlgorithm().trim().isEmpty()) {
+            throw new BaseException("算法名 algorithm 不能为空");
+        }
+        // 只拦截明显越界的值；算法与必填参数的组合校验由上游按算法分派完成，
+        // 避免在网关重复实现一套规则导致两边不一致
+        if (request.getTestSize() != null
+                && (request.getTestSize() <= 0 || request.getTestSize() >= 1)) {
+            throw new BaseException("testSize 必须介于 0 与 1 之间（不含边界）");
+        }
+        if (request.getMaxDepth() != null
+                && (request.getMaxDepth() < 1 || request.getMaxDepth() > 50)) {
+            throw new BaseException("maxDepth 必须介于 1 与 50 之间");
+        }
+        if (request.getNEstimators() != null
+                && (request.getNEstimators() < 1 || request.getNEstimators() > 500)) {
+            throw new BaseException("nEstimators 必须介于 1 与 500 之间");
+        }
+        if (request.getNClusters() != null
+                && (request.getNClusters() < 2 || request.getNClusters() > 20)) {
+            throw new BaseException("nClusters 必须介于 2 与 20 之间");
+        }
+        log.info("统一建模：algorithm={}，target={}，features={}，limit={}",
+                request.getAlgorithm(), request.getTarget(),
+                request.getFeatures() == null ? null : request.getFeatures().size(),
+                request.getLimit());
+        return agentApiClient.train(request);
     }
 }

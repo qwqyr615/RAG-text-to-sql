@@ -424,9 +424,176 @@ data: {"job_id":"399e…","status":"succeeded","progress":100,"stage":"分析完
 
 ## 5. 机器建模
 
+> 已实现的算法（对应题目「建模能力」的要求）：
+> **Isolation Forest 异常检测、线性回归、决策树、随机森林、逻辑回归、KMeans 聚类**。
+>
+> 接口分两组：
+> - **统一入口** `POST /modeling/train` + `GET /modeling/algorithms` —— 推荐，
+>   新增算法只需在上游 `ALGORITHM_CATALOG` 加一条，前端自动出现入口；
+> - **专用接口** `/modeling/anomaly`、`/modeling/regression` —— 早期为便于调试开放，
+>   最终调用同一批建模函数，结果结构一致，保留以兼容既有调用。
+
+### GET /api/v1/modeling/algorithms
+
+列出全部算法及元信息，供前端渲染算法卡片与参数表单。
+
+```json
+{
+  "code": 1,
+  "data": {
+    "total": 6,
+    "table": "fact_production_record",
+    "algorithms": [
+      {
+        "name": "decision_tree",
+        "label": "决策树 · DecisionTree",
+        "family": "supervised",
+        "supervised": true,
+        "task_type": "回归 / 分类",
+        "requires_target": true,
+        "supports_task_auto": true,
+        "params": ["target", "features", "maxDepth", "testSize", "taskType"],
+        "description": "可解释性最强：给出特征重要性与决策规则，按目标列自动判定分类或回归。"
+      }
+    ]
+  }
+}
+```
+
+| 算法 `name` | 任务类型 | 需要 target | 可调参数 |
+|---|---|---|---|
+| `isolation_forest` | 异常检测 | 否 | `contamination`、`features`、`limit` |
+| `linear_regression` | 回归 | 是 | `target`、`features`、`testSize`、`limit` |
+| `decision_tree` | 回归 / 分类（自动判定） | 是 | `maxDepth`、`taskType` 等 |
+| `random_forest` | 回归 / 分类（自动判定） | 是 | `nEstimators`、`maxDepth`、`taskType` 等 |
+| `logistic_regression` | 二分类 | 是 | `threshold`、`testSize` 等 |
+| `kmeans` | 聚类 | 否 | `nClusters`、`maxK`、`features` |
+
+### POST /api/v1/modeling/train
+
+统一建模入口。
+
+请求：
+
+```json
+{
+  "algorithm": "random_forest",
+  "target": "defect_rate",
+  "features": ["quality_score", "downtime_minutes"],
+  "limit": 10000,
+  "nEstimators": 100,
+  "maxDepth": null,
+  "testSize": 0.2
+}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `algorithm` | 必填，取上面的 `name` |
+| `target` | 有监督算法必填；KMeans / 异常检测不使用 |
+| `features` | 不传则用该算法的默认特征集 |
+| `maxDepth` | 树深度上限（决策树默认 5；随机森林默认不限） |
+| `nEstimators` | 随机森林树数量，默认 100 |
+| `taskType` | 强制 `classification` / `regression`，不传则按目标列取值个数自动判定 |
+| `threshold` | 逻辑回归二分阈值，不传取目标列中位数 |
+| `nClusters` / `maxK` | KMeans 聚类数 / 自动选 k 上限 |
+
+**参数命名**：camelCase 与 snake_case 都接受（上游为这些字段声明了 camelCase 别名）。
+
+**任务类型自动判定**：目标列去重后取值个数 ≤ 15 视为分类，否则为回归。
+例如 `fault_event_count`（0/1/2/3）会被判为分类，`defect_rate` 判为回归。
+
+**回归 / 分类响应**（决策树、随机森林）：
+
+```json
+{
+  "code": 1,
+  "data": {
+    "algorithm": "RandomForest",
+    "task_type": "回归预测建模",
+    "model_task": "regression",
+    "target": "defect_rate",
+    "feature_columns": ["quality_score", "first_pass_yield"],
+    "train_size": 8000,
+    "test_size": 2000,
+    "params": { "max_depth": null, "n_estimators": 100, "random_state": 42 },
+    "r2_score": 0.7714,
+    "rmse": 0.3685,
+    "feature_importance": { "quality_score": 0.7021, "first_pass_yield": 0.135 },
+    "importance_summary": "quality_score(0.7021)、first_pass_yield(0.1350)",
+    "sample_predictions": [
+      { "record_id": 4032, "machine_id": "M17", "production_line": "Line_A",
+        "shift": "Night", "actual": 3.91, "predict": 3.95 }
+    ]
+  }
+}
+```
+
+分类任务把 `r2_score`/`rmse` 换成 `accuracy` / `precision_macro` /
+`recall_macro` / `f1_macro` / `classes` / `class_distribution`。
+
+`feature_importance` 按降序排列且归一化到 1（可用作特征筛选依据）。
+
+**逻辑回归响应**（额外字段）：
+
+| 字段 | 说明 |
+|---|---|
+| `label_definition` | 两个类别的文字定义，如 `["<= 3.9041", "> 3.9041"]` |
+| `label_derived` | `true` 表示目标列非天然二分类，已按阈值二分 |
+| `threshold` | 实际使用的阈值 |
+| `coefficients` | 标准化后的系数，按绝对值降序，可直接比较重要性 |
+| `scaled` | 恒为 `true`，表示特征已标准化 |
+| `sample_predictions[].probability` | 正类概率 |
+
+**KMeans 响应**：
+
+```json
+{
+  "code": 1,
+  "data": {
+    "algorithm": "KMeans",
+    "task_type": "聚类分析",
+    "model_task": "clustering",
+    "feature_columns": ["defect_rate", "quality_score"],
+    "total_records": 9500,
+    "n_clusters": 3,
+    "auto_selected": true,
+    "silhouette": 0.1488,
+    "candidates": [{ "k": 2, "silhouette": 0.1488, "inertia": 45000.0, "calinski_harabasz": 1200.0 }],
+    "clusters": [
+      { "cluster": 0, "size": 2101, "ratio": 0.37,
+        "centroid": { "defect_rate": 3.288 },
+        "dominant_machine_id": "M08", "dominant_production_line": "Line_D" }
+    ],
+    "cluster_profile": [{ "cluster": 0, "defect_rate": 3.288 }],
+    "overall_mean": { "defect_rate": 3.8961 },
+    "sample_records": []
+  }
+}
+```
+
+- `auto_selected: true` 表示未指定 `nClusters`，后端在 2..6 间按轮廓系数择优；
+- `candidates` 给出每个候选 k 的评分，前端可展示「如何选 k」；
+- `clusters[].dominant_*` 是该簇出现最多的上下文字段取值，用于描述「这是个什么簇」；
+- `cluster_profile` 是各簇的特征均值，与 `overall_mean` 对比即可看出簇间差异。
+
+**错误返回**（`code=0`，均为可读中文）：
+
+| 场景 | `msg` 示例 |
+|---|---|
+| 未知算法 | `不支持的算法 'xgboost'，可选：isolation_forest, linear_regression, ...` |
+| 有监督算法缺 target | `随机森林 · RandomForest 必须提供 target（目标列）` |
+| 目标列/特征列不存在 | `目标列不存在: no_such_column` |
+| 少数类过少 | `少数类样本过少（4 条），逻辑回归结果不可靠，请调整阈值或更换目标列` |
+| 有效样本不足 | `有效数据太少，无法训练模型（至少需要 30 条有效样本）` |
+
+> **建模只查询一张表**（默认 `fact_production_record`）。
+> 数据库里可能同时存在多个数据源（例如客户原始表用 `mot_t`/`def_rate` 这类缩写列名），
+> 因此 `/modeling/features` 只返回**建模表**的字段，避免用户选中不属于该表的列。
+
 ### POST /api/v1/modeling/anomaly
 
-Isolation Forest 异常检测。
+Isolation Forest 异常检测（专用接口）。
 
 请求：
 
@@ -458,7 +625,7 @@ Isolation Forest 异常检测。
 
 ### POST /api/v1/modeling/regression
 
-线性回归训练与评估。
+线性回归训练与评估（专用接口）。
 
 请求：
 
@@ -498,12 +665,19 @@ Isolation Forest 异常检测。
       { "table": "fact_production_record", "name": "defect_rate", "type": "DOUBLE",
         "description": "缺陷率百分比", "numeric": true }
     ],
-    "total": 106
+    "total": 39,
+    "table": "fact_production_record",
+    "default_features": {
+      "anomaly": ["defect_rate", "quality_score"],
+      "regression": ["quality_score", "first_pass_yield"]
+    },
+    "note": "建模模块只查询 fact_production_record 表；如需分析其他数据源，请先在 mapping.yaml 中完成字段映射。"
   }
 }
 ```
 
-`role=numeric` 只返回数值字段；省略则返回全部。
+`role=numeric` 只返回数值字段；省略则返回全部。`default_features` 供前端预选，
+避免默认全选导致 `record_id` 这类无意义字段进入模型。
 
 ---
 

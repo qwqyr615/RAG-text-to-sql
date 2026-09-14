@@ -30,6 +30,7 @@ from server.schemas import (
     JobStateResponse,
     JobSubmitResponse,
     RegressionRequest,
+    TrainRequest,
     ok,
 )
 
@@ -292,6 +293,162 @@ async def agent_job_stream(job_id: str) -> StreamingResponse:
 # ---------------------------------------------------------------------------
 # 建模
 # ---------------------------------------------------------------------------
+#: 算法元信息：驱动前端的算法选择与参数表单。新增算法只需在这里加一条，
+#: 前端会自动出现对应入口（见 ModelingPage 的 ALGORITHM_CARDS 渲染逻辑）。
+ALGORITHM_CATALOG: list[dict[str, Any]] = [
+    {
+        "name": "isolation_forest",
+        "label": "异常检测 · Isolation Forest",
+        "family": "anomaly",
+        "supervised": False,
+        "task_type": "异常检测",
+        "requires_target": False,
+        "supports_task_auto": False,
+        "params": ["contamination", "features", "limit"],
+        "description": "无监督异常检测，适合发现偏离整体分布的设备与批次记录。",
+    },
+    {
+        "name": "linear_regression",
+        "label": "线性回归 · LinearRegression",
+        "family": "supervised",
+        "supervised": True,
+        "task_type": "回归",
+        "requires_target": True,
+        "supports_task_auto": False,
+        "params": ["target", "features", "testSize", "limit"],
+        "description": "线性拟合，系数方向可直接解释特征对目标的正负影响。",
+    },
+    {
+        "name": "decision_tree",
+        "label": "决策树 · DecisionTree",
+        "family": "supervised",
+        "supervised": True,
+        "task_type": "回归 / 分类",
+        "requires_target": True,
+        "supports_task_auto": True,
+        "params": ["target", "features", "maxDepth", "testSize", "taskType"],
+        "description": "可解释性最强：给出特征重要性与决策规则，按目标列自动判定分类或回归。",
+    },
+    {
+        "name": "random_forest",
+        "label": "随机森林 · RandomForest",
+        "family": "supervised",
+        "supervised": True,
+        "task_type": "回归 / 分类",
+        "requires_target": True,
+        "supports_task_auto": True,
+        "params": ["target", "features", "nEstimators", "maxDepth", "testSize", "taskType"],
+        "description": "多棵树集成，通常比单棵决策树更稳、泛化更好，特征重要性也更可靠。",
+    },
+    {
+        "name": "logistic_regression",
+        "label": "逻辑回归 · LogisticRegression",
+        "family": "supervised",
+        "supervised": True,
+        "task_type": "二分类",
+        "requires_target": True,
+        "supports_task_auto": False,
+        "params": ["target", "features", "threshold", "testSize"],
+        "description": "二分类建模。目标列非天然二分类时按阈值（默认中位数）二分，输出概率与系数。",
+    },
+    {
+        "name": "kmeans",
+        "label": "聚类 · KMeans",
+        "family": "clustering",
+        "supervised": False,
+        "task_type": "聚类",
+        "requires_target": False,
+        "supports_task_auto": False,
+        "params": ["features", "nClusters", "maxK", "limit"],
+        "description": "按特征相似度分群。不指定 k 时自动在 2..6 之间按轮廓系数择优。",
+    },
+]
+
+
+@modeling_router.get("/algorithms", response_model=Envelope, summary="支持的建模算法")
+def modeling_algorithms() -> dict[str, Any]:
+    """列出全部可用算法及其元信息，供前端渲染选择卡片与参数表单。"""
+    return ok(
+        {
+            "algorithms": ALGORITHM_CATALOG,
+            "total": len(ALGORITHM_CATALOG),
+            "table": _modeling_table(),
+        }
+    )
+
+
+def _modeling_table() -> str:
+    """建模模块实际查询的表名（供前端提示，避免字段与算法对不上）。"""
+    try:
+        from tools.modeling import TABLE_NAME
+
+        return TABLE_NAME
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+@modeling_router.post("/train", response_model=Envelope, summary="统一建模入口")
+def modeling_train(request: TrainRequest) -> dict[str, Any]:
+    """统一建模入口：决策树 / 随机森林 / 逻辑回归 / KMeans。
+
+    与 ``/anomaly``、``/regression`` 的关系：这两个是早期为便于调试而单独开放的
+    专用接口，本接口是统一入口。两者最终都调用 ``tools.modeling`` 的同一批函数，
+    因此结果结构一致。
+
+    参数校验交给 ``tools.modeling.run_model``：算法不同，必填参数不同
+    （例如有监督算法必须有 ``target``），把这类规则集中在建模层，
+    避免在 HTTP 层与 Java 网关重复实现导致不一致。
+    """
+    from tools.modeling import run_model
+
+    payload: dict[str, Any] = {
+        "features": request.features,
+        "limit": request.limit,
+    }
+    # 仅传递显式提供的参数：None 会让建模层退回各自的默认值
+    if request.target is not None:
+        payload["target"] = request.target
+    if request.test_size is not None:
+        payload["test_size"] = request.test_size
+    if request.max_depth is not None:
+        payload["max_depth"] = request.max_depth
+    if request.n_estimators is not None:
+        payload["n_estimators"] = request.n_estimators
+    if request.task_type is not None:
+        payload["task_type"] = request.task_type
+    if request.threshold is not None:
+        payload["threshold"] = request.threshold
+    if request.n_clusters is not None:
+        payload["n_clusters"] = request.n_clusters
+    if request.max_k is not None:
+        payload["max_k"] = request.max_k
+
+    # 有监督算法缺 target 时给出明确提示，而不是让建模层抛 KeyError 风格的信息
+    from tools.modeling import SUPPORTED_ALGORITHMS
+
+    algorithm = (request.algorithm or "").strip().lower()
+    if algorithm not in SUPPORTED_ALGORITHMS:
+        return {
+            "code": 0,
+            "msg": f"不支持的算法 {request.algorithm!r}，可选：{', '.join(SUPPORTED_ALGORITHMS)}",
+            "data": None,
+        }
+    entry = next((item for item in ALGORITHM_CATALOG if item["name"] == algorithm), None)
+    if entry and entry["requires_target"] and not request.target:
+        return {"code": 0, "msg": f"{entry['label']} 必须提供 target（目标列）", "data": None}
+
+    try:
+        result = run_model(algorithm, payload)
+    except ValueError as exc:
+        # 参数或数据不满足算法要求：属于可预期的用户输入问题，返回可读信息
+        logger.warning("建模参数/数据校验失败 algorithm=%s：%s", algorithm, exc)
+        return {"code": 0, "msg": str(exc), "data": None}
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("建模失败 algorithm=%s", algorithm)
+        return {"code": 0, "msg": f"建模失败：{exc}", "data": None}
+    return ok(result)
+
+
 @modeling_router.post("/anomaly", response_model=Envelope, summary="Isolation Forest 异常检测")
 def modeling_anomaly(request: AnomalyRequest) -> dict[str, Any]:
     """异常检测。"""

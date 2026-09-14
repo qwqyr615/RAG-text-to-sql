@@ -5,6 +5,7 @@ import com.agent.constant.AgentConstants;
 import com.agent.dto.AgentAskDTO;
 import com.agent.dto.AnomalyRequestDTO;
 import com.agent.dto.RegressionRequestDTO;
+import com.agent.dto.TrainRequestDTO;
 import com.agent.exception.AgentApiException;
 import com.agent.result.Result;
 import com.agent.util.JsonUtils;
@@ -266,6 +267,29 @@ public class AgentApiClient {
         }
         return exchange(path, HttpMethod.GET, null, new TypeReference<ModelingFeaturesVO>() {
         });
+    }
+
+    /**
+     * 统一建模入口（决策树 / 随机森林 / 逻辑回归 / KMeans）。
+     *
+     * <p>用 {@code Map} 承接结果：不同算法的输出字段不同
+     * （{@code feature_importance} / {@code accuracy} / {@code clusters} /
+     * {@code silhouette} 等），强类型化会让每新增算法都要改多个类。
+     *
+     * @param request 建模请求
+     * @return 建模结果信封
+     */
+    public Result<Map<String, Object>> train(TrainRequestDTO request) {
+        return exchange("/modeling/train", HttpMethod.POST, request, mapType());
+    }
+
+    /**
+     * 列出支持的建模算法及元信息。
+     *
+     * @return {@code {algorithms:[{name,label,family,requires_target,params,...}], total, table}}
+     */
+    public Result<Map<String, Object>> algorithms() {
+        return exchange("/modeling/algorithms", HttpMethod.GET, null, mapType());
     }
 
     // ==================================================================

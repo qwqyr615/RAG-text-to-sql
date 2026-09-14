@@ -178,6 +178,70 @@ class RegressionRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class TrainRequest(BaseModel):
+    """统一建模请求（决策树 / 随机森林 / 逻辑回归 / KMeans）。
+
+    刻意用宽松的可选字段而不是每种算法一个模型：算法参数差异大
+    （``max_depth`` / ``n_estimators`` / ``threshold`` / ``n_clusters``），
+    为每个算法单独建模型会让网关与前端都要跟着新增接口。
+    这里统一入口，由 ``tools.modeling.run_model`` 按算法名分派并校验参数。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    algorithm: str = Field(
+        default="random_forest",
+        description="算法名：decision_tree / random_forest / logistic_regression / kmeans",
+    )
+    target: Optional[str] = Field(
+        default=None, description="目标列（有监督算法必填；KMeans 不使用）"
+    )
+    features: Optional[list[str]] = Field(default=None, description="特征列，不传用默认特征集")
+    limit: Optional[int] = Field(default=10_000, ge=30, description="最多读取行数")
+    test_size: float = Field(default=0.2, gt=0, lt=1, alias="testSize", description="测试集比例")
+
+    # 决策树 / 随机森林
+    max_depth: Optional[int] = Field(
+        default=None, ge=1, le=50, alias="maxDepth", description="树最大深度"
+    )
+    n_estimators: Optional[int] = Field(
+        default=None, ge=1, le=500, alias="nEstimators", description="随机森林树数量"
+    )
+    # 强制指定任务类型：不传则由目标列取值个数自动判定
+    task_type: Optional[Literal["classification", "regression"]] = Field(
+        default=None, alias="taskType", description="强制任务类型，不传则自动判定"
+    )
+
+    # 逻辑回归
+    threshold: Optional[float] = Field(
+        default=None, description="逻辑回归二分阈值；目标列非天然二分类时生效，默认取中位数"
+    )
+
+    # KMeans
+    n_clusters: Optional[int] = Field(
+        default=None, ge=2, le=20, alias="nClusters", description="聚类数；不传则按轮廓系数自动选"
+    )
+    max_k: Optional[int] = Field(
+        default=None, ge=2, le=20, alias="maxK", description="自动选 k 时的上限"
+    )
+
+
+class AlgorithmInfo(BaseModel):
+    """单个算法的元信息，供前端渲染选择卡片与参数表单。"""
+
+    name: str = Field(description="算法标识，传给 /modeling/train 的 algorithm")
+    label: str = Field(description="中文名称")
+    family: Literal["anomaly", "supervised", "clustering"] = Field(description="算法族")
+    supervised: bool = Field(description="是否需要目标列")
+    task_type: str = Field(description="任务类型：回归 / 分类 / 聚类 / 异常检测")
+    requires_target: bool = Field(description="是否必须提供 target")
+    supports_task_auto: bool = Field(
+        default=False, description="是否支持按目标列自动判定分类/回归"
+    )
+    params: list[str] = Field(default_factory=list, description="该算法可调参数名列表")
+    description: str = Field(default="", description="算法说明")
+
+
 # ---------------------------------------------------------------------------
 # 内核结果 → 契约对象
 # ---------------------------------------------------------------------------

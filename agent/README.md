@@ -106,8 +106,29 @@ D:\Anaconda\envs\sqllangchain\python.exe -m uvicorn server.main:app --host 0.0.0
 | `GET /api/v1/knowledge/graph` | 知识图谱（主题→对象→指标→字段→表） |
 | `POST /api/v1/agent/ask/async` | 异步提问，立即返回 `job_id` |
 | `GET /api/v1/agent/jobs/{id}/stream` | **SSE** 推送分析进度与结果 |
+| `GET /api/v1/modeling/algorithms` | 支持的建模算法清单与参数元信息 |
+| `POST /api/v1/modeling/train` | **统一建模入口**：决策树 / 随机森林 / 逻辑回归 / KMeans |
 | `POST /api/v1/modeling/anomaly` | Isolation Forest 异常检测 |
 | `POST /api/v1/modeling/regression` | 线性回归建模 |
+
+### 建模能力
+
+对应题目「建模能力」的要求，已实现六种算法：
+
+| 算法 | 任务类型 | 说明 |
+|---|---|---|
+| Isolation Forest | 异常检测 | 无监督，发现偏离整体分布的记录 |
+| LinearRegression | 回归 | 系数方向可直接解释特征影响 |
+| DecisionTree | 回归 / 分类 | 按目标列自动判定；输出特征重要性与决策规则 |
+| RandomForest | 回归 / 分类 | 多树集成，比单棵树更稳，重要性更可靠 |
+| LogisticRegression | 二分类 | 目标列非天然二分类时按阈值（默认中位数）二分，输出概率 |
+| KMeans | 聚类 | 不指定 k 时按轮廓系数在 2..6 间择优，输出各簇质心与主导属性 |
+
+统一走 `POST /api/v1/modeling/train`（`algorithm` 指定算法），
+新增算法只需在上游 `ALGORITHM_CATALOG` 加一条，前端会自动出现入口。
+
+所有模型都会返回**业务可读的结果解释**与带上下文字段（设备/产线/班次）的预测样例，
+便于定位问题而不是只给一个抽象指标。
 
 所有响应统一信封 `{code, msg, data}`（`code=1` 成功），与 Java 侧
 `com.agent.result.Result` 字段级一致，网关可原样透传。
@@ -295,7 +316,8 @@ D:\Anaconda\envs\sqllangchain\python.exe -m pytest tests -q
 - [x] 实现 FastAPI 接口（metadata/knowledge/agent/modeling + SSE）——见 `server/`
 - [x] 图表自动生成（`AgentResult.chart_config`，大模型出 ECharts option + 规则兜底）
 - [x] Java 网关（`backend/`，Spring Boot）与前端（`FRONTEND/`，React）接入
-- [ ] 增加更多机器学习模型，例如 KMeans、决策树、随机森林
+- [x] 补齐题目要求的建模算法：决策树、随机森林、逻辑回归、KMeans
 - [ ] 把成功执行的 question/SQL 自动回写 Milvus，形成在线学习闭环
 - [ ] 多实例部署时把进程内任务表（`server/deps.py` 的 `JobStore`）换成 Redis
 - [ ] 细化 SSE 进度上报（当前内核 `agent.invoke()` 同步阻塞，进度只能按阶段上报）
+- [ ] 决策树规则导出（把 `tree_.decision_path` 转成业务可读的 if-else 规则）

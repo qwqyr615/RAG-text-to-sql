@@ -320,3 +320,100 @@ export interface RegressionResult {
   coefficients: Record<string, number>
   sample_predictions: Record<string, unknown>[]
 }
+
+// ---------------------------------------------------------------------------
+// 统一建模（决策树 / 随机森林 / 逻辑回归 / KMeans）
+// ---------------------------------------------------------------------------
+export type AlgorithmFamily = 'anomaly' | 'supervised' | 'clustering'
+
+/** GET /modeling/algorithms 的算法元信息 */
+export interface AlgorithmInfo {
+  name: string
+  label: string
+  family: AlgorithmFamily
+  supervised: boolean
+  task_type: string
+  requires_target: boolean
+  supports_task_auto: boolean
+  params: string[]
+  description: string
+}
+
+export interface AlgorithmsPayload {
+  algorithms: AlgorithmInfo[]
+  total: number
+  table: string
+}
+
+/** POST /modeling/train 请求体 */
+export interface TrainRequest {
+  algorithm: string
+  target?: string | null
+  features?: string[] | null
+  limit?: number | null
+  testSize?: number
+  maxDepth?: number | null
+  nEstimators?: number | null
+  taskType?: 'classification' | 'regression' | null
+  threshold?: number | null
+  nClusters?: number | null
+  maxK?: number | null
+}
+
+/**
+ * 建模结果。
+ *
+ * 不同算法的输出字段不同（`feature_importance` / `accuracy` / `clusters` /
+ * `silhouette` …），因此这里用一个宽松类型，由结果渲染层按存在性分支处理。
+ */
+export interface TrainResult {
+  algorithm: string
+  task_type: string
+  model_task?: string
+  target?: string
+  label_definition?: string[]
+  label_derived?: boolean
+  threshold?: number | null
+  feature_columns: string[]
+  train_size?: number
+  test_size?: number
+  params?: Record<string, unknown>
+  scaled?: boolean
+
+  // 回归
+  r2_score?: number
+  rmse?: number
+  coefficients?: Record<string, number>
+  intercept?: number
+
+  // 分类
+  accuracy?: number
+  precision_macro?: number
+  recall_macro?: number
+  f1_macro?: number
+  classes?: string[]
+  class_distribution?: Record<string, number>
+
+  // 树模型
+  feature_importance?: Record<string, number>
+  importance_summary?: string
+
+  // 聚类
+  n_clusters?: number
+  auto_selected?: boolean
+  silhouette?: number
+  candidates?: { k: number; silhouette: number; inertia: number; calinski_harabasz: number }[]
+  clusters?: {
+    cluster: number
+    size: number
+    ratio: number
+    centroid: Record<string, number>
+    [key: string]: unknown
+  }[]
+  cluster_profile?: Record<string, unknown>[]
+  overall_mean?: Record<string, number>
+  total_records?: number
+
+  sample_predictions?: Record<string, unknown>[]
+  sample_records?: Record<string, unknown>[]
+}
