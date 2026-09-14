@@ -17,6 +17,7 @@ import pytest
 from server.deps import JobStore, build_analysis_steps, build_knowledge_graph
 from server.schemas import (
     AskRequest,
+    AskResponse,
     ChartConfig,
     Envelope,
     ok,
@@ -532,3 +533,107 @@ def test_modeling_features_handles_missing_table(monkeypatch):
     assert data["fields"] == []
     assert data["total"] == 0
     assert data["default_features"] == {"anomaly": [], "regression": []}
+
+
+# ---------------------------------------------------------------------------
+# 报告路由
+# ---------------------------------------------------------------------------
+def test_report_route_forces_want_report_and_passes_report_through(monkeypatch):
+    """`/agent/report` 必须强制开启报告，并把 report 原样透出。
+
+    回归测试：该接口曾被误判为「report 恒为 null」。实际根因是排查时
+    PowerShell 请求体编码问题（中文 keyword 变成 mojibake）导致
+    wantReport/报告路由未生效，并非产品缺陷。这里把正确行为钉死：
+    无论调用方是否传 wantReport，`/agent/report` 都必须产出 report。
+    """
+    from fastapi.testclient import TestClient
+
+    import server.routes as routes
+
+    captured: dict[str, Any] = {}
+
+    class FakeService:
+        def ask(self, request):
+            captured["want_report"] = request.want_report
+            captured["question"] = request.question
+            return AskResponse(
+                task_type="report",
+                success=True,
+                question=request.question,
+                session_id=request.session_id,
+                analysis_text="各产线缺陷率接近。",
+                report="# 生产质量分析报告\n\n## 一、总体结论\n质量稳定。",
+            )
+
+    monkeypatch.setattr(routes, "get_service", lambda: FakeService())
+
+    # 用最小 FastAPI 应用挂载路由，避免触发真实内核初始化
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    app.include_router(routes.agent_router)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/v1/agent/report",
+        # 刻意不传 wantReport，验证路由会强制开启
+        json={"question": "生成一份质量分析报告", "sessionId": "t-report"},
+    )
+    body = response.json()
+
+    assert response.status_code == 200
+    assert body["code"] == 1
+    # 路由必须自己把 want_report 打开
+    assert captured["want_report"] is True
+    assert captured["question"] == "生成一份质量分析报告"
+
+    data = body["data"]
+    assert data["task_type"] == "report"
+    assert data["report"].startswith("# 生产质量分析报告")
+    assert len(data["report"]) > 0
+
+
+def test_ask_route_honours_want_report(monkeypatch):
+    """`/agent/ask` 在 wantReport=true 时同样要产出报告。"""
+    from fastapi.testclient import TestClient
+    from fastapi import FastAPI
+
+    import server.routes as routes
+
+    captured: dict[str, Any] = {}
+
+    class FakeService:
+        def ask(self, request):
+            captured["want_report"] = request.want_report
+            return AskResponse(
+                task_type="report" if request.want_report else "sql_query",
+                success=True,
+                question=request.question,
+                report="## 报告" if request.want_report else None,
+            )
+
+    monkeypatch.setattr(routes, "get_service", lambda: FakeService())
+
+    app = FastAPI()
+    app.include_router(routes.agent_router)
+    client = TestClient(app)
+
+    body = client.post(
+        "/api/v1/agent/ask",
+        json={"question": "生成质量报告", "sessionId": "t-ask", "wantReport": True},
+    ).json()
+
+    assert captured["want_report"] is True
+    assert body["data"]["report"] == "## 报告"
+
+
+def test_ask_response_alias_accepts_both_naming_styles():
+    """请求体同时接受 camelCase 与 snake_case，前端/网关任一写法都不会静默失效。"""
+    camel = AskRequest(**{"question": "q", "sessionId": "a", "wantReport": True})
+    snake = AskRequest(**{"question": "q", "session_id": "b", "want_report": True})
+
+    assert camel.session_id == "a" and camel.want_report is True
+    assert snake.session_id == "b" and snake.want_report is True
+    # 默认值
+    assert AskRequest(question="q").want_report is False
+    assert AskRequest(question="q").want_chart is True
