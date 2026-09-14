@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -160,6 +162,43 @@ def test_scripts_import_without_connecting_to_database() -> None:
     assert callable(init_module.apply_schema)
     assert callable(health_module.run_health_check)
     assert len(health_module.CHECKS) == 9
+
+
+def _run_script_directly(script_name: str) -> subprocess.CompletedProcess:
+    """在子进程里复现 `python scripts/xxx.py` 的导入环境。
+
+    按路径直接运行脚本时 ``sys.path[0]`` 是 ``scripts/`` 而不是 ``agent/``，
+    脚本必须自己把项目根目录补进 ``sys.path``，否则 ``import core/metadata/...`` 会失败。
+    """
+    code = (
+        "import runpy, sys\n"
+        "sys.path[0] = 'scripts'\n"
+        f"module = runpy.run_path('scripts/{script_name}', run_name='probe')\n"
+        "assert module\n"
+    )
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=BASE_DIR,
+        env=env,
+        check=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "script_name", ["init_preset_schema.py", "check_schema_health.py"]
+)
+def test_scripts_run_directly_without_import_errors(script_name: str) -> None:
+    """回归：README 里写的 `python scripts/xxx.py` 必须真的能跑通。
+
+    历史上这两个脚本依赖 PyCharm 自动把 content root 加进 PYTHONPATH，
+    在命令行直接运行会报 ``ModuleNotFoundError``。
+    """
+    result = _run_script_directly(script_name)
+    assert result.returncode == 0, (
+        f"{script_name} 直接运行失败（退出码 {result.returncode}）"
+    )
 
 
 # ----------------------------------------------------------------------

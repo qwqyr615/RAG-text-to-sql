@@ -25,17 +25,23 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
-from sqlalchemy import inspect, text
-from sqlalchemy.engine import Engine
+# 允许用 `python scripts/xxx.py` 直接运行（该方式下 sys.path[0] 是 scripts/）
+_AGENT_ROOT = Path(__file__).resolve().parents[1]
+if str(_AGENT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_AGENT_ROOT))
 
-from metadata.preset_metadata import (
+from sqlalchemy import inspect, text  # noqa: E402
+from sqlalchemy.engine import Engine  # noqa: E402
+
+from metadata.preset_metadata import (  # noqa: E402
     COLUMN_DESCRIPTIONS,
     PRESET_BUSINESS_TABLES,
     RELATIONSHIPS,
 )
-from metadata.schema_ddl import (
+from metadata.schema_ddl import (  # noqa: E402
     CONVERTED_NUMERIC_COLUMNS,
     LEGACY_DIM_TABLES,
     SOURCE_TABLE,
@@ -45,7 +51,7 @@ from metadata.schema_ddl import (
     expected_table,
     normalize_type,
 )
-from tools.database import get_engine
+from tools.database import get_engine  # noqa: E402
 
 #: 浮点比较容差。
 #: MySQL 对精确类型（INT / DECIMAL）做 AVG() 会返回 4 位小数的 DECIMAL，
@@ -95,7 +101,9 @@ def _snapshot(engine: Engine, table: str) -> SchemaSnapshot:
     inspector = inspect(engine)
     table_names = set(inspector.get_table_names())
     if table not in table_names:
-        return SchemaSnapshot(table_names=table_names, columns=[], primary_key=[], row_count=0)
+        return SchemaSnapshot(
+            table_names=table_names, columns=[], primary_key=[], row_count=0
+        )
 
     with engine.connect() as conn:
         row_count = int(
@@ -121,10 +129,15 @@ def _check_table_inventory(engine: Engine, snapshot: SchemaSnapshot) -> CheckRes
     leftovers = [name for name in LEGACY_DIM_TABLES if name in snapshot.table_names]
     passed = not missing and not leftovers
 
-    detail = f"库中共 {len(snapshot.table_names)} 张表：{', '.join(sorted(snapshot.table_names))}"
+    detail = (
+        f"库中共 {len(snapshot.table_names)} 张表："
+        f"{', '.join(sorted(snapshot.table_names))}"
+    )
     notes = []
     if missing:
-        notes.append(f"缺少必需表：{', '.join(missing)}（先运行 scripts/init_preset_schema.py）")
+        notes.append(
+            f"缺少必需表：{', '.join(missing)}（先运行 scripts/init_preset_schema.py）"
+        )
     if leftovers:
         notes.append(f"仍存在历史派生维表：{', '.join(leftovers)}（路线 B 不应保留）")
     return CheckResult(name="表清单符合单表模型", passed=passed, detail=detail, notes=notes)
@@ -132,8 +145,8 @@ def _check_table_inventory(engine: Engine, snapshot: SchemaSnapshot) -> CheckRes
 
 def _compare_columns(
     snapshot: SchemaSnapshot, expected: list[DdlColumn]
-) -> tuple[list[str], list[str]]:
-    """返回 (缺失或顺序不一致的说明, 多余列说明)。"""
+) -> list[str]:
+    """返回列清单/顺序不一致的说明。"""
     actual = snapshot.column_names
     wanted = [column.name for column in expected]
 
@@ -147,12 +160,12 @@ def _compare_columns(
             issues.append(f"库里有但 DDL 没有：{', '.join(extra)}")
         if not missing and not extra:
             issues.append("列集合相同但顺序不一致")
-    return issues, []
+    return issues
 
 
 def _check_column_list(engine: Engine, snapshot: SchemaSnapshot) -> CheckResult:
     expected = expected_columns()
-    issues, _ = _compare_columns(snapshot, expected)
+    issues = _compare_columns(snapshot, expected)
     return CheckResult(
         name="列清单与顺序与 DDL 一致",
         passed=not issues,
@@ -171,7 +184,8 @@ def _check_column_types(engine: Engine, snapshot: SchemaSnapshot) -> CheckResult
         actual_type = normalize_type(actual["type"])
         if actual_type != column.type:
             issues.append(
-                f"{column.name}: DDL={column.type} 实际={actual_type}（原始 {actual['type']}）"
+                f"{column.name}: DDL={column.type} 实际={actual_type}"
+                f"（原始 {actual['type']}）"
             )
 
     text_columns = [
@@ -218,7 +232,9 @@ def _check_primary_key(engine: Engine, snapshot: SchemaSnapshot) -> CheckResult:
     else:
         detail = "无主键声明"
 
-    return CheckResult(name="主键与 grain 唯一性", passed=not issues, detail=detail, notes=issues)
+    return CheckResult(
+        name="主键与 grain 唯一性", passed=not issues, detail=detail, notes=issues
+    )
 
 
 def _check_nullability(engine: Engine, snapshot: SchemaSnapshot) -> CheckResult:
@@ -240,7 +256,8 @@ def _check_nullability(engine: Engine, snapshot: SchemaSnapshot) -> CheckResult:
     not_null_columns = [column.name for column in expected if not column.nullable]
     if not_null_columns and not issues:
         select_parts = ", ".join(
-            f"SUM(CASE WHEN `{name}` IS NULL THEN 1 ELSE 0 END)" for name in not_null_columns
+            f"SUM(CASE WHEN `{name}` IS NULL THEN 1 ELSE 0 END)"
+            for name in not_null_columns
         )
         with engine.connect() as conn:
             null_counts = conn.execute(
@@ -274,32 +291,32 @@ def _check_row_parity_and_fidelity(
             )
 
         for column in CONVERTED_NUMERIC_COLUMNS:
-            row = conn.execute(
-                text(
-                    f"SELECT AVG(CAST(TRIM(`{column}`) AS DOUBLE)) FROM {SOURCE_TABLE}"
-                )
+            source_avg = conn.execute(
+                text(f"SELECT AVG(CAST(TRIM(`{column}`) AS DOUBLE)) FROM {SOURCE_TABLE}")
             ).scalar_one()
-            source_avg = float(row) if row is not None else None
-
-            row = conn.execute(
+            target_avg = conn.execute(
                 text(f"SELECT AVG(`{column}`) FROM {table}")
             ).scalar_one()
-            target_avg = float(row) if row is not None else None
 
             if source_avg is None or target_avg is None:
-                issues.append(f"{column}: 平均值无法计算（源={source_avg} 服务层={target_avg}）")
-                continue
-            tolerance = max(_TOLERANCE, abs(source_avg) * 1e-9)
-            if abs(source_avg - target_avg) > tolerance:
                 issues.append(
-                    f"{column}: 转换后数值不一致（源表均值 {source_avg:.6f}，"
-                    f"服务层均值 {target_avg:.6f}）"
+                    f"{column}: 平均值无法计算（源={source_avg} 服务层={target_avg}）"
+                )
+                continue
+            tolerance = max(_TOLERANCE, abs(float(source_avg)) * 1e-9)
+            if abs(float(source_avg) - float(target_avg)) > tolerance:
+                issues.append(
+                    f"{column}: 转换后数值不一致（源表均值 {float(source_avg):.6f}，"
+                    f"服务层均值 {float(target_avg):.6f}）"
                 )
 
     return CheckResult(
         name="行数与数值保真（转换未静默归零）",
         passed=not issues,
-        detail=f"服务层 {snapshot.row_count} 行，已核对 {len(CONVERTED_NUMERIC_COLUMNS)} 个转换列的均值",
+        detail=(
+            f"服务层 {snapshot.row_count} 行，"
+            f"已核对 {len(CONVERTED_NUMERIC_COLUMNS)} 个转换列的均值"
+        ),
         notes=issues,
     )
 
@@ -337,8 +354,8 @@ def _check_numeric_sorting(engine: Engine, snapshot: SchemaSnapshot) -> CheckRes
             ):
                 issues.append(
                     f"{column}: 列的 MIN/MAX 与按数值解释的结果不一致"
-                    f"（列：{column_min} ~ {column_max}，数值：{numeric_min} ~ {numeric_max}）"
-                    "，说明仍在按字典序比较"
+                    f"（列：{column_min} ~ {column_max}，"
+                    f"数值：{numeric_min} ~ {numeric_max}），说明仍在按字典序比较"
                 )
                 continue
 
@@ -359,11 +376,11 @@ def _check_numeric_sorting(engine: Engine, snapshot: SchemaSnapshot) -> CheckRes
 
 
 def _check_comments(engine: Engine, snapshot: SchemaSnapshot) -> CheckResult:
-    missing = []
-    for column in snapshot.columns:
-        comment = str(column.get("comment") or "").strip()
-        if not comment:
-            missing.append(str(column["name"]))
+    missing = [
+        str(column["name"])
+        for column in snapshot.columns
+        if not str(column.get("comment") or "").strip()
+    ]
     return CheckResult(
         name="每个列都有 COMMENT",
         passed=not missing,
@@ -385,8 +402,8 @@ def _check_preset_metadata(engine: Engine, snapshot: SchemaSnapshot) -> CheckRes
         table_name, _, column_name = key.partition(".")
         if table_name not in snapshot.table_names:
             issues.append(f"COLUMN_DESCRIPTIONS 引用了不存在的表：{key}")
-        elif column_name and snapshot.column(column_name) is None:
-            if table_name == expected_table():
+        elif column_name and table_name == expected_table():
+            if snapshot.column(column_name) is None:
                 issues.append(f"COLUMN_DESCRIPTIONS 引用了不存在的列：{key}")
 
     relations = list(RELATIONSHIPS)
@@ -396,8 +413,10 @@ def _check_preset_metadata(engine: Engine, snapshot: SchemaSnapshot) -> CheckRes
             column_name = relation[f"{side}_column"]
             if table_name not in snapshot.table_names:
                 issues.append(f"RELATIONSHIPS 引用了不存在的表：{table_name}")
-            elif snapshot.column(column_name) is None and table_name == expected_table():
-                issues.append(f"RELATIONSHIPS 引用了不存在的列：{table_name}.{column_name}")
+            elif table_name == expected_table() and snapshot.column(column_name) is None:
+                issues.append(
+                    f"RELATIONSHIPS 引用了不存在的列：{table_name}.{column_name}"
+                )
 
     detail = (
         f"白名单 {len(PRESET_BUSINESS_TABLES)} 张表，"

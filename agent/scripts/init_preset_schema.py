@@ -29,15 +29,30 @@ DDL 与装载 SQL 放在 ``sql/`` 目录（可 review、可 diff、可单独跑�
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
-from sqlalchemy import text
-from sqlalchemy.engine import Engine
+# 允许用 `python scripts/xxx.py` 直接运行。
+# 这种方式下 sys.path[0] 是 scripts/ 而不是 agent/，需要手动补上项目根目录，
+# 否则 `import core/metadata/knowledge/...` 会报 ModuleNotFoundError
+# （此前只能靠 PyCharm 自动把 content root 加进 PYTHONPATH 才跑得通）。
+_AGENT_ROOT = Path(__file__).resolve().parents[1]
+if str(_AGENT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_AGENT_ROOT))
 
-from knowledge.knowledge_service import export_knowledge_json
-from metadata.metadata_service import export_metadata_json
-from metadata.schema_ddl import DDL_FILE, LOAD_FILE, SCHEMA_FILES, load_statements, resolve_path
-from tools.database import get_engine
+from sqlalchemy import text  # noqa: E402
+from sqlalchemy.engine import Engine  # noqa: E402
+
+from knowledge.knowledge_service import export_knowledge_json  # noqa: E402
+from metadata.metadata_service import export_metadata_json  # noqa: E402
+from metadata.schema_ddl import (  # noqa: E402
+    DDL_FILE,
+    LOAD_FILE,
+    SCHEMA_FILES,
+    load_statements,
+    resolve_path,
+)
+from tools.database import get_engine  # noqa: E402
 
 
 def apply_schema(engine: Engine, *, verbose: bool = True) -> int:
