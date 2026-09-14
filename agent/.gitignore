@@ -25,3 +25,6 @@ logs/*
 # 本地 Milvus / Milvus Lite 测试数据，非正式 RAG 代码
 *.db/
 milvus/
+
+# 多轮会话落盘（SESSION_STORE=file 时产生，含对话内容，不入库）
+sessions/

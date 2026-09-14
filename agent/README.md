@@ -104,6 +104,47 @@ D:\Anaconda\envs\sqllangchain\python.exe -m rag.ingest_examples
 D:\Anaconda\envs\sqllangchain\python.exe main.py
 ```
 
+## 示例库管理（vanna train 的等价物）
+
+```powershell
+cd agent
+python -m rag.cli stats                     # 集合与示例文件概况
+python -m rag.cli validate --check-schema   # 校验示例引用的表是否真实存在
+python -m rag.cli ingest                    # 重建并导入
+python -m rag.cli ingest --append           # 增量追加
+```
+
+只需管理 question-SQL 示例：表结构来自数据库 DDL（不训练 ddl），业务口径来自
+`core/metrics.py` 与 `knowledge_base.py`（不训练 documentation）。
+
+## 多轮会话
+
+同一 `session_id` 内的历史会作为 `chat_history` 注入 Prompt，支持「那 Night 班次呢」
+这类追问；以 `new` 开新会话。
+
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `SESSION_MAX_TURNS` | `6` | 单会话保留轮数，0 表示关闭多轮 |
+| `SESSION_STORE` | `memory` | `memory`（进程内）/ `file`（落盘到 `sessions/`） |
+
+## 消融评测（RAG × 指标段）
+
+```powershell
+cd agent
+python scripts/run_eval.py --validate        # 零成本：只校验用例集与参照 SQL
+python -m rag.cli ingest                     # 跑真实矩阵前先把示例灌进 Milvus
+python scripts/run_eval.py                   # 跑 4 个配置的完整对照
+python scripts/run_eval.py --limit 8 --configs rag_off+metrics_on,rag_on+metrics_on
+```
+
+用例集 `evals/cases.jsonl` 共 40 条，报告输出到 `evals/reports/`。
+方案与解读见 `docs/EVALUATION.md`。
+
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `RAG_ENABLED` | `true` | 关掉即为 rag_off 配置 |
+| `PROMPT_METRICS_ENABLED` | `true` | 关掉即为 metrics_off 配置 |
+
 ## 单元测试
 
 ```powershell

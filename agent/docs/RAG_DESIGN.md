@@ -23,6 +23,31 @@
 `vector dimension mismatch, expected vector size(byte) 4096, actual 16384`），自动删除旧集合并按新维度重建；
 检索路径（`search_sql_examples`）检测到重建后会用 `rag/examples/sql_examples.json` 立即回灌数据，无需人工干预。
 如需完全手动重建：`D:\Anaconda\envs\sqllangchain\python.exe -m rag.ingest_examples`（默认 `drop_old=True`）。
+等价的新命令见下方「示例库管理命令」。
+
+## 示例库管理命令（vanna train 的等价物）
+
+```powershell
+cd agent
+python -m rag.cli stats                                # 集合与示例文件概况
+python -m rag.cli validate --check-schema              # 校验示例：字段、只读、表是否存在
+python -m rag.cli search "各产线的平均缺陷率" --top-k 3  # 检索相似示例
+python -m rag.cli ingest                               # 重建：删集合后全量重灌
+python -m rag.cli ingest --append                      # 增量：只追加，不删旧数据
+python -m rag.cli clear --yes                          # 删除集合
+```
+
+**为什么不是 vanna 的 `train(ddl=..., sql=..., documentation=...)`**
+
+- `ddl` 不训练：单表宽表模型下表结构直接来自数据库（DDL `COMMENT` + inspector），
+  再训练一份手写 DDL 只会过期；
+- `documentation` 不训练：业务口径以结构化形式维护在 `core/metrics.py` 与
+  `knowledge/knowledge_base.py`，比自由文本可控，且能校验字段是否真实存在；
+- 只剩 `question-SQL 示例`需要管理，就是上面的命令。
+
+**表名一致性校验**：`validate` / `ingest` 会检查示例 SQL 里 `FROM` / `JOIN` 的表是否
+真实存在。路线 B 删除 `dim_*` 之后，示例库里残留的 `JOIN dim_line` 会把模型直接带偏，
+这个校验就是用来拦它的（`tests/test_rag_examples.py` 也守着这条）。
 
 ## 检索质量与注入方式
 
