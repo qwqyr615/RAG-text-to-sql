@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+      企业数据底座智能问析 Agent 系统 —— Java 网关父工程。
+
+      架构参照「苍穹外卖」(sky-take-out) 的企业级 Maven 多模块规范：
+        agent-common  通用模块：统一返回结果、异常、常量、工具
+        agent-pojo    实体模块：DTO / VO / entity
+        agent-server  服务模块：controller / service / config / handler
+
+      网关职责：对前端（React）暴露统一 REST 契约，向下调用 Python Agent 内核的
+      FastAPI 适配层（默认 http://127.0.0.1:8000），并原样透传其 {code,msg,data} 信封。
+
+      Spring Boot 版本说明：
+        本机唯一可用 JDK 是 21（E:\develop\jdk），而 Spring Boot 2.7.3 配套的
+        Spring Framework 5.3 官方仅支持到 Java 19，属于不受支持的组合，
+        因此改用官方支持 JDK 21 的 Spring Boot 3.2.x + Java 17 字节码。
+        版本选 3.2.3（而不是更高的 3.2.10）：本机 Maven 离线仓库
+        （E:\develop\mvn_repo）已完整缓存 3.2.3 的全套构件，包括
+        spring-boot-maven-plugin 打包所需的 spring-boot-loader-tools 与
+        spring-boot-buildpack-platform；3.2.10 缺少这两个运行时 jar，
+        在无外网环境下必然打包失败。
+        Spring Boot 3 使用 jakarta.* 命名空间（不再是 javax.*）。
+    -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.2.3</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.agent</groupId>
+    <artifactId>agent-gateway</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+    <name>agent-gateway</name>
+    <description>企业数据底座智能问析 Agent 系统 - Java 网关</description>
+
+    <modules>
+        <module>agent-common</module>
+        <module>agent-pojo</module>
+        <module>agent-server</module>
+    </modules>
+
+    <properties>
+        <!-- Java 17 字节码，用 JDK 21 编译运行（17 字节码在 21 上完全兼容） -->
+        <java.version>17</java.version>
+        <maven.compiler.release>17</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+        <!-- 第三方依赖版本统一在此管理 -->
+        <lombok.version>1.18.30</lombok.version>
+        <!--
+          Apache HttpClient 5：Spring Framework 6 只支持 HttpClient 5
+          （HttpComponentsClientHttpRequestFactory 构造器签名已改为
+          org.apache.hc.client5.http.classic.HttpClient）。
+          显式钉住版本，以匹配本机离线仓库中已缓存的构件。
+        -->
+        <httpclient5.version>5.2.3</httpclient5.version>
+        <httpcore5.version>5.2.4</httpcore5.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- 本项目内部模块 -->
+            <dependency>
+                <groupId>com.agent</groupId>
+                <artifactId>agent-common</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.agent</groupId>
+                <artifactId>agent-pojo</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.agent</groupId>
+                <artifactId>agent-server</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <!-- Lombok：注解处理器，编译期生效 -->
+            <dependency>
+                <groupId>org.projectlombok</groupId>
+                <artifactId>lombok</artifactId>
+                <version>${lombok.version}</version>
+                <scope>provided</scope>
+            </dependency>
+
+            <!-- Apache HttpClient 5：为 RestTemplate 提供连接池 -->
+            <dependency>
+                <groupId>org.apache.httpcomponents.client5</groupId>
+                <artifactId>httpclient5</artifactId>
+                <version>${httpclient5.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.httpcomponents.core5</groupId>
+                <artifactId>httpcore5</artifactId>
+                <version>${httpcore5.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <plugins>
+            <!--
+              彻底摘掉 surefire 的测试执行绑定。
+
+              为什么不用 -Dmaven.test.skip=true / -DskipTests：
+              这两个开关只让 surefire「跳过执行」，Maven 仍会去解析该插件的传递依赖
+              （maven-surefire-common、surefire-api、surefire-booter 等），
+              而本机离线仓库缺失它们，构建会以 PluginResolutionException 失败。
+              把 execution 绑定到 none 阶段后，surefire 根本不进入构建计划，
+              离线构建即可顺利完成。本网关以「实际接口调用」作为验证手段，不需要单测。
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>default-test</id>
+                        <phase>none</phase>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+
+        <pluginManagement>
+            <plugins>
+                <!--
+                  离线环境适配：Spring Boot 3.2.3 默认使用 maven-jar-plugin 3.3.0，
+                  但它依赖的 plexus-archiver 4.4.0 在本机 Maven 仓库中缺失
+                  （只有 4.7.1 / 4.9.2）。升级到 3.4.2 —— 它依赖 plexus-archiver 4.9.2，
+                  本机已缓存，且产物行为一致（都是标准 jar 打包）。
+                -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-jar-plugin</artifactId>
+                    <version>3.4.2</version>
+                </plugin>
+
+                <!-- 编译参数：Java 17 字节码 + UTF-8 + Lombok 注解处理器 -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <configuration>
+                        <release>${maven.compiler.release}</release>
+                        <encoding>UTF-8</encoding>
+                        <!-- 参数名保留：Spring MVC 绑定 @PathVariable/@RequestParam 时更稳 -->
+                        <parameters>true</parameters>
+                        <annotationProcessorPaths>
+                            <path>
+                                <groupId>org.projectlombok</groupId>
+                                <artifactId>lombok</artifactId>
+                                <version>${lombok.version}</version>
+                            </path>
+                        </annotationProcessorPaths>
+                    </configuration>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+</project>

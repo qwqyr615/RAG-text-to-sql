@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.agent</groupId>
+        <artifactId>agent-gateway</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>agent-pojo</artifactId>
+    <packaging>jar</packaging>
+    <name>agent-pojo</name>
+    <description>实体模块：DTO / VO / entity（与上游 FastAPI 契约一一对应）</description>
+
+    <dependencies>
+        <!-- 依赖 common：DTO/VO 复用统一的 Result 与异常类型 -->
+        <dependency>
+            <groupId>com.agent</groupId>
+            <artifactId>agent-common</artifactId>
+        </dependency>
+
+        <!-- Jackson 注解（@JsonProperty / @JsonIgnoreProperties）随 starter-web 传入 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <skip>true</skip>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

@@ -1,0 +1,45 @@
+# ======================================================================
+# 开发环境配置（spring.profiles.active: dev）
+#
+# 前提依赖：**必须先启动 Python Agent 内核的 FastAPI 适配层**，
+#           否则所有 /api/v1/** 代理接口都会返回 code=0 与
+#           「Agent 服务不可用，请确认 FastAPI 已在 127.0.0.1:8000 启动」。
+#
+# 启动命令（在仓库根目录执行）：
+#   cd agent
+#   $env:PYTHONIOENCODING='utf-8'
+#   D:\Anaconda\envs\sqllangchain\python.exe -m uvicorn server.main:app --host 127.0.0.1 --port 8000
+# ======================================================================
+server:
+  port: 8080
+
+agent:
+  api:
+    # 上游 FastAPI 基地址（不硬编码在 Java 代码里，全部由配置注入）
+    base-url: http://127.0.0.1:8000
+    # 上游接口统一前缀
+    prefix: /api/v1
+
+    # 建立 TCP 连接的超时：上游在本机，10 秒足够，且能在上游未启动时快速失败
+    connect-timeout: 10000
+
+    # 读取超时：上游同步问答最长阻塞 90 秒（SQL_AGENT_MAX_EXECUTION_TIME），
+    # 这里给到 180 秒，确保不会在引擎正常工作时被网关提前掐断。
+    read-timeout: 180000
+
+    # 连接池：本机单上游，200 总连接 / 50 单路由足够
+    max-total-connections: 200
+    max-connections-per-route: 50
+
+    # 连接空闲 2 秒后再次取用前做一次可用性校验
+    validate-after-inactivity-millis: 2000
+
+    # 从连接池取连接的等待上限，避免高并发下无限等待
+    connection-request-timeout: 10000
+
+logging:
+  level:
+    root: info
+    com.agent: debug
+    # 想看每次调用的上游 URL 时打开下面这行
+    com.agent.service.AgentApiClient: debug

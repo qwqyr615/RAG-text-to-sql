@@ -1,0 +1,81 @@
+# ======================================================================
+# 主配置：企业数据底座智能问析 Agent 系统 - Java 网关
+#
+# 约定：这里只放与环境无关的通用配置；
+#       端口、上游地址等可能随环境变化的项放到 application-{profile}.yml。
+# ======================================================================
+server:
+  port: 8080
+  servlet:
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
+  # 优雅停机：等待在途请求（长耗时的同步问答）处理完再退出
+  shutdown: graceful
+  tomcat:
+    threads:
+      # 同步问答最长阻塞 180s，线程池留足余量
+      max: 200
+      min-spare: 20
+
+spring:
+  application:
+    name: agent-gateway
+  profiles:
+    # 默认激活 dev；生产可用 -Dspring.profiles.active=prod 覆盖
+    active: dev
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+  # ------------------------------------------------------------------
+  # Jackson：全局 snake_case
+  #
+  # 上游 FastAPI 适配层的响应统一是 snake_case（table_name、row_count、
+  # chart_config、analysis_steps、session_id...）。
+  # 打开这个策略后，agent-pojo 里的 Java 驼峰字段会自动映射到上游的下划线
+  # 字段，既不用逐个写 @JsonProperty，也保证网关对外输出的 JSON 与上游
+  # 逐字段一致 —— 前端只需要认一种契约。
+  # ------------------------------------------------------------------
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+    default-property-inclusion: always
+    time-zone: GMT+8
+    serialization:
+      write-dates-as-timestamps: false
+
+  mvc:
+    # 404 交给 GlobalExceptionHandler 处理，而不是返回 Whitelabel 页面
+    throw-exception-if-no-handler-found: true
+  web:
+    resources:
+      add-mappings: false
+
+# ----------------------------------------------------------------------
+# 上游 Agent（FastAPI 适配层）连接配置
+#
+# 具体数值在 application-dev.yml 中覆盖；这里给出安全的默认值，
+# 保证即使 profile 文件缺失也不会启动失败。
+# ----------------------------------------------------------------------
+agent:
+  api:
+    base-url: http://127.0.0.1:8000
+    prefix: /api/v1
+    connect-timeout: 10000
+    read-timeout: 180000
+    max-total-connections: 200
+    max-connections-per-route: 50
+    validate-after-inactivity-millis: 2000
+    connection-request-timeout: 10000
+
+# ----------------------------------------------------------------------
+# 日志
+# ----------------------------------------------------------------------
+logging:
+  level:
+    root: info
+    com.agent: info
+    # 打开可看到每次上游调用的 URL 与 body 长度
+    com.agent.service.AgentApiClient: info
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
