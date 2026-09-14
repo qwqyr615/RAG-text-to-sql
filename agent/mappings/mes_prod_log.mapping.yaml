@@ -1,0 +1,290 @@
+# 客户接入契约示例：某厂 MES 生产日志表 mes_prod_log
+#
+# 这份文件模拟「换一个客户库」的真实接入场景：
+#
+#   * 表名是客户自己的（mes_prod_log），不是我们的 fact_production_record；
+#   * 列名是 MES 的缩写风格（def_rate / stop_min / fpy / alarm_cnt）；
+#   * **45 个列一个注释都没有** —— 数据库里读不出任何语义，这正是 mapping 的价值所在；
+#   * 其中 2 列的**单位与标准口径不同**：
+#       - def_rate 存的是比例（0.039），标准口径缺陷率是百分数（3.9）
+#       - util     存的是比例（0.70），标准口径设备利用率是百分数（70）
+#     所以 expression 里带 ×100。没有这一层，任何数值都合格；有了它，算错就是算错。
+#
+# 数据是 mes_prod_log（15000 行）。它与标准库 fact_production_record 逐行对应，
+# 差别只有列名与上述两个列的单位 —— 这一点让「换一张表」的对照实验有了干净的
+# 因果解释：数据没变，只换了命名、注释与单位。
+#
+# 审核要点（mapping.cli review 会逐条展示）：
+#   1. 45 列中 45 列都有标准字段认领，0 列未映射；
+#   2. 2 列需要单位换算，expression 必须出现在生成的 SQL 里；
+#   3. 该表被映射为 fact 角色，库里其余 2 张表（fact_production_record /
+#      intelligent_production_iiot）被 discovery.exclude 排除，保证 Agent 只看到
+#      一张表 —— 否则模型会在两张内容等价的表之间随机挑一张。
+
+schema_version: "1.0"
+
+profile: mes_prod_log
+description: 某厂 MES 生产日志（无列注释，缩写字列名，比率型单位）
+
+database:
+  dialect: mysql
+  url_env: DATABASE_URL
+  note: 与标准底座同库；本表是客户 MES 侧的生产日志视图
+
+discovery:
+  # 客户特有的排除项：原始 CSV 导入层 + 标准服务层都不要暴露。
+  # 排除标准服务层是刻意的：它与 mes_prod_log 内容等价，一起暴露会让模型随机挑选，
+  # 对照实验就失去意义（评测里另一个配置才会把它打开）。
+  exclude:
+    - intelligent_production_iiot
+    - fact_production_record
+
+relationships: []
+
+tables:
+  - name: mes_prod_log
+    role: fact
+    description: 客户 MES 生产日志宽表，一行代表一次生产运行。
+    grain: 一行 = 一次生产运行（rec_no 唯一）
+    primary_key: rec_no
+    time_column: ""
+    notes: 45 列全部没有数据库注释，字段语义完全来自本映射。
+
+    columns:
+      # ---------------- 主键与维度 ----------------
+      - column: rec_no
+        standard_fields:
+          - name: record_id
+            role: key
+
+      - column: mach_no
+        standard_fields:
+          - name: machine_id
+            role: dimension
+            notes: 客户编码形如 M01
+
+      - column: line_cd
+        standard_fields:
+          - name: production_line
+            role: dimension
+            notes: 客户编码形如 Line_A
+
+      - column: lot_no
+        standard_fields:
+          - name: batch_id
+            role: dimension
+            notes: 客户编码形如 B0001
+
+      - column: sft
+        standard_fields:
+          - name: shift
+            role: dimension
+            enum_values: [Morning, Afternoon, Night]
+
+      - column: prod_tp
+        standard_fields:
+          - name: product_type
+            role: dimension
+            notes: 客户编码形如 Product_A
+
+      # ---------------- 环境与设备传感器 ----------------
+      - column: env_t
+        standard_fields:
+          - name: ambient_temperature
+            unit: 摄氏度
+
+      - column: rh
+        standard_fields:
+          - name: humidity
+            unit: 百分比
+
+      - column: atm_p
+        standard_fields:
+          - name: air_pressure
+
+      - column: env_vib
+        standard_fields:
+          - name: ambient_vibration
+
+      - column: mot_t
+        standard_fields:
+          - name: motor_temperature
+            unit: 摄氏度
+
+      - column: spd
+        standard_fields:
+          - name: spindle_speed
+            unit: 转每分
+
+      - column: cur
+        standard_fields:
+          - name: motor_current
+            unit: 安培
+
+      - column: trq
+        standard_fields:
+          - name: torque
+            unit: 牛米
+
+      - column: vib
+        standard_fields:
+          - name: vibration
+
+      - column: noise
+        standard_fields:
+          - name: acoustic_level
+            unit: 分贝
+
+      - column: brg_t
+        standard_fields:
+          - name: bearing_temperature
+            unit: 摄氏度
+
+      - column: proc_t
+        standard_fields:
+          - name: process_temperature
+            unit: 摄氏度
+
+      - column: hyd_p
+        standard_fields:
+          - name: hydraulic_pressure
+
+      - column: flow
+        standard_fields:
+          - name: flow_rate
+
+      - column: cool_t
+        standard_fields:
+          - name: coolant_temperature
+            unit: 摄氏度
+
+      - column: feed_r
+        standard_fields:
+          - name: material_feed_rate
+
+      - column: feed_p
+        standard_fields:
+          - name: feed_pressure
+
+      # ---------------- 产量效率能耗 ----------------
+      - column: ct
+        standard_fields:
+          - name: cycle_time
+            unit: 秒
+
+      - column: tput
+        standard_fields:
+          - name: throughput_rate
+
+      - column: out_qty
+        standard_fields:
+          - name: production_volume
+            unit: 件
+
+      # 单位换算 1/2：客户存比例，标准口径是百分数
+      - column: util
+        standard_fields:
+          - name: machine_utilization
+            scale: 100
+            expression: util * 100
+            unit: 比例(0-1)
+            notes: 客户列存 0.70，标准口径为 70；SQL 必须写成 util * 100
+
+      - column: res_util
+        standard_fields:
+          - name: resource_utilization
+            unit: 百分比
+
+      - column: op_load
+        standard_fields:
+          - name: operator_load
+            unit: 百分比
+
+      - column: kwh
+        standard_fields:
+          - name: power_consumption
+            unit: 千瓦时
+
+      - column: kwh_unit
+        standard_fields:
+          - name: energy_per_unit
+            unit: 千瓦时每件
+
+      # ---------------- 质量与设备健康 ----------------
+      # 单位换算 2/2：客户存比例，标准口径是百分数
+      - column: def_rate
+        standard_fields:
+          - name: defect_rate
+            scale: 100
+            expression: def_rate * 100
+            unit: 比例(0-1)
+            notes: 客户列存 0.039，标准口径为 3.9；SQL 必须写成 def_rate * 100
+
+      - column: q_score
+        standard_fields:
+          - name: quality_score
+            unit: 分
+
+      - column: fpy
+        standard_fields:
+          - name: first_pass_yield
+            unit: 百分比
+            notes: 客户列已是百分数，无需换算
+
+      - column: alarm_cnt
+        standard_fields:
+          - name: fault_event_count
+            unit: 次
+
+      - column: stop_min
+        standard_fields:
+          - name: downtime_minutes
+            unit: 分钟
+
+      - column: maint_cnt
+        standard_fields:
+          - name: maintenance_frequency
+            unit: 次
+
+      - column: unit_cost
+        standard_fields:
+          - name: production_cost_per_unit
+            unit: 元每件
+
+      # ---------------- 改善类指标 ----------------
+      - column: res_eff
+        standard_fields:
+          - name: resource_efficiency
+            unit: 百分比
+
+      - column: prod_eff
+        standard_fields:
+          - name: production_efficiency
+            unit: 百分比
+
+      - column: es_pct
+        standard_fields:
+          - name: energy_saving_pct
+            unit: 百分比
+
+      - column: dtr_pct
+        standard_fields:
+          - name: downtime_reduction_pct
+            unit: 百分比
+
+      - column: cr_pct
+        standard_fields:
+          - name: cost_reduction_pct
+            unit: 百分比
+
+      - column: benefit
+        standard_fields:
+          - name: benefit_score
+            unit: 分
+
+      # ---------------- 生产模式 ----------------
+      - column: op_mode
+        standard_fields:
+          - name: operation_mode
+            role: dimension
+            enum_values: [Balanced_Production, Precision_Quality, High_Throughput, Energy_Efficient]

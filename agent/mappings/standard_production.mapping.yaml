@@ -1,0 +1,141 @@
+# 标准底座映射：fact_production_record（治理后的服务层）
+#
+# 这份映射与 mes_prod_log.mapping.yaml 是**同一个机制的两种形态**，放在一起对照即可看出
+# 「标准字段 ↔ 客户列」映射的通用性：
+#
+#   fact_production_record（本文件）      mes_prod_log（客户侧）
+#   ────────────────────────────────     ────────────────────────────────
+#   列名 = 标准字段名                     列名 = MES 缩写
+#   每列都有 COMMENT                      45 列全部无注释
+#   单位就是标准单位（无换算）             2 列是比例，需 ×100
+#
+# 这份映射存在的意义：
+#   1. 让「标准模型」也走发现 + 映射这一条路径，代码里不再有第二条分支；
+#   2. 作为评测的 baseline —— 数据、单位、列名都是标准的，模型应该拿高分。
+#
+# 注意 discovery.exclude 把没治理的原始层排除掉：它是同一个 CSV 的原样导入，
+# 11 个数值指标以 TEXT 存储，排序按字典序会静默算错（见 docs/DATA_MODEL.md）。
+
+schema_version: "1.0"
+
+profile: standard_production
+description: 标准生产记录底座（治理后的服务层，列名与 COMMENT 均规范化）
+
+database:
+  dialect: mysql
+  url_env: DATABASE_URL
+  note: 本项目自带的样板数据集
+
+discovery:
+  exclude:
+    - intelligent_production_iiot
+    - mes_prod_log
+
+relationships: []
+
+tables:
+  - name: fact_production_record
+    role: fact
+    description: 生产记录事实宽表，单表模型的服务层，一行代表一次生产运行。
+    grain: 一行 = 一次生产运行（record_id 唯一）
+    primary_key: record_id
+    time_column: ""
+    notes: 列名即标准字段名，列 COMMENT 与标准口径一致，无需单位换算。
+
+    columns:
+      - column: record_id
+        standard_fields: [{name: record_id, role: key}]
+      - column: machine_id
+        standard_fields: [{name: machine_id, role: dimension}]
+      - column: production_line
+        standard_fields: [{name: production_line, role: dimension}]
+      - column: batch_id
+        standard_fields: [{name: batch_id, role: dimension}]
+      - column: shift
+        standard_fields:
+          - name: shift
+            role: dimension
+            enum_values: [Morning, Afternoon, Night]
+      - column: product_type
+        standard_fields: [{name: product_type, role: dimension}]
+      - column: ambient_temperature
+        standard_fields: [{name: ambient_temperature, unit: 摄氏度}]
+      - column: humidity
+        standard_fields: [{name: humidity, unit: 百分比}]
+      - column: air_pressure
+        standard_fields: [{name: air_pressure}]
+      - column: ambient_vibration
+        standard_fields: [{name: ambient_vibration}]
+      - column: motor_temperature
+        standard_fields: [{name: motor_temperature, unit: 摄氏度}]
+      - column: spindle_speed
+        standard_fields: [{name: spindle_speed, unit: 转每分}]
+      - column: motor_current
+        standard_fields: [{name: motor_current, unit: 安培}]
+      - column: torque
+        standard_fields: [{name: torque, unit: 牛米}]
+      - column: vibration
+        standard_fields: [{name: vibration}]
+      - column: acoustic_level
+        standard_fields: [{name: acoustic_level, unit: 分贝}]
+      - column: bearing_temperature
+        standard_fields: [{name: bearing_temperature, unit: 摄氏度}]
+      - column: process_temperature
+        standard_fields: [{name: process_temperature, unit: 摄氏度}]
+      - column: hydraulic_pressure
+        standard_fields: [{name: hydraulic_pressure}]
+      - column: flow_rate
+        standard_fields: [{name: flow_rate}]
+      - column: coolant_temperature
+        standard_fields: [{name: coolant_temperature, unit: 摄氏度}]
+      - column: material_feed_rate
+        standard_fields: [{name: material_feed_rate}]
+      - column: feed_pressure
+        standard_fields: [{name: feed_pressure}]
+      - column: cycle_time
+        standard_fields: [{name: cycle_time, unit: 秒}]
+      - column: throughput_rate
+        standard_fields: [{name: throughput_rate}]
+      - column: production_volume
+        standard_fields: [{name: production_volume, unit: 件}]
+      - column: machine_utilization
+        standard_fields: [{name: machine_utilization, unit: 百分比}]
+      - column: resource_utilization
+        standard_fields: [{name: resource_utilization, unit: 百分比}]
+      - column: operator_load
+        standard_fields: [{name: operator_load, unit: 百分比}]
+      - column: power_consumption
+        standard_fields: [{name: power_consumption, unit: 千瓦时}]
+      - column: energy_per_unit
+        standard_fields: [{name: energy_per_unit, unit: 千瓦时每件}]
+      - column: defect_rate
+        standard_fields: [{name: defect_rate, unit: 百分比}]
+      - column: quality_score
+        standard_fields: [{name: quality_score, unit: 分}]
+      - column: first_pass_yield
+        standard_fields: [{name: first_pass_yield, unit: 百分比}]
+      - column: fault_event_count
+        standard_fields: [{name: fault_event_count, unit: 次}]
+      - column: downtime_minutes
+        standard_fields: [{name: downtime_minutes, unit: 分钟}]
+      - column: maintenance_frequency
+        standard_fields: [{name: maintenance_frequency, unit: 次}]
+      - column: production_cost_per_unit
+        standard_fields: [{name: production_cost_per_unit, unit: 元每件}]
+      - column: resource_efficiency
+        standard_fields: [{name: resource_efficiency, unit: 百分比}]
+      - column: production_efficiency
+        standard_fields: [{name: production_efficiency, unit: 百分比}]
+      - column: energy_saving_pct
+        standard_fields: [{name: energy_saving_pct, unit: 百分比}]
+      - column: downtime_reduction_pct
+        standard_fields: [{name: downtime_reduction_pct, unit: 百分比}]
+      - column: cost_reduction_pct
+        standard_fields: [{name: cost_reduction_pct, unit: 百分比}]
+      - column: benefit_score
+        standard_fields: [{name: benefit_score, unit: 分}]
+      - column: operation_mode
+        standard_fields:
+          - name: operation_mode
+            role: dimension
+            enum_values: [Balanced_Production, Precision_Quality, High_Throughput, Energy_Efficient]
