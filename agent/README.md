@@ -6,9 +6,15 @@
 
 ```text
 agent/
+├── server/                  # HTTP 适配层（FastAPI）：对 Java 网关/前端暴露接口
+│   ├── main.py              # 应用入口（含 sys.path 引导、CORS、启动预热）
+│   ├── routes.py            # 全部路由：system/metadata/knowledge/agent/modeling
+│   ├── schemas.py           # 请求响应模型 + 统一信封 + 内核结果转换
+│   └── deps.py              # 内核单例、异步任务表、知识图谱组装
 ├── agents/                  # Agent 层：各类智能体
 │   ├── enterprise_agent.py  # 总 Agent：问题路由
 │   ├── text2sql_agent.py    # Text-to-SQL 核心 Agent（LangChain SQL Agent + 只读守卫）
+│   ├── chart_agent.py       # 图表配置生成（大模型出 ECharts option + 规则兜底）
 │   └── report_agent.py      # 报告生成
 ├── core/                    # 核心配置与通用能力
 │   ├── config.py            # 从 .env 读取全局配置（含 Prompt 预算与循环上限）
@@ -73,6 +79,50 @@ D:\Anaconda\envs\sqllangchain\python.exe -m pip install -r requirements.txt
 
 # 3. 启动命令行验证
 D:\Anaconda\envs\sqllangchain\python.exe main.py
+```
+
+## HTTP 接口服务（FastAPI）
+
+`agent/server/` 把内核包装成 REST + SSE 接口，供 Java 网关（`backend/`）与
+React 前端（`FRONTEND/`）调用。
+
+```powershell
+cd agent
+D:\Anaconda\envs\sqllangchain\python.exe -m uvicorn server.main:app --host 0.0.0.0 --port 8000
+```
+
+- Swagger 文档：http://127.0.0.1:8000/docs
+- 健康检查：http://127.0.0.1:8000/api/v1/system/health
+
+**必须在 `agent/` 目录下启动**：内核各模块使用扁平导入
+（`from agents.text2sql_agent import ...`），需要 `agent/` 在 `sys.path` 上。
+`server/main.py` 已内置路径引导，因此 `python server/main.py` 也能直接运行。
+
+接口清单与完整契约见 [`docs/API_DESIGN.md`](docs/API_DESIGN.md)。要点：
+
+| 接口 | 说明 |
+|---|---|
+| `GET /api/v1/metadata/tables` | 表 / 字段 / 类型 / 说明 / 样例值 |
+| `GET /api/v1/knowledge/graph` | 知识图谱（主题→对象→指标→字段→表） |
+| `POST /api/v1/agent/ask/async` | 异步提问，立即返回 `job_id` |
+| `GET /api/v1/agent/jobs/{id}/stream` | **SSE** 推送分析进度与结果 |
+| `POST /api/v1/modeling/anomaly` | Isolation Forest 异常检测 |
+| `POST /api/v1/modeling/regression` | 线性回归建模 |
+
+所有响应统一信封 `{code, msg, data}`（`code=1` 成功），与 Java 侧
+`com.agent.result.Result` 字段级一致，网关可原样透传。
+
+### 为什么问析必须用异步 + SSE
+
+实测一次提问（「找出停机时间最长的 10 台设备」）耗时 **94 秒**，超过
+`SQL_AGENT_MAX_EXECUTION_TIME`（默认 90 秒）。同步 HTTP 返回会让前端与网关超时，
+因此提供 `ask/async` + SSE，前端拿不到 SSE 时可降级轮询 `/agent/jobs/{id}`。
+
+接口自检（不需要大模型）：
+
+```powershell
+cd agent
+D:\Anaconda\envs\sqllangchain\python.exe -m pytest tests/test_server_adapter.py -q
 ```
 
 ## 数据底座初始化（单表宽表模型）
@@ -242,8 +292,10 @@ D:\Anaconda\envs\sqllangchain\python.exe -m pytest tests -q
 
 ## 下一步计划
 
-- [ ] 实现 FastAPI 接口（metadata/knowledge/agent）
-- [ ] Java/前端接入
-- [ ] 增加图表自动生成（`AgentResult.chart_config` 目前仍是预留字段）
+- [x] 实现 FastAPI 接口（metadata/knowledge/agent/modeling + SSE）——见 `server/`
+- [x] 图表自动生成（`AgentResult.chart_config`，大模型出 ECharts option + 规则兜底）
+- [x] Java 网关（`backend/`，Spring Boot）与前端（`FRONTEND/`，React）接入
 - [ ] 增加更多机器学习模型，例如 KMeans、决策树、随机森林
 - [ ] 把成功执行的 question/SQL 自动回写 Milvus，形成在线学习闭环
+- [ ] 多实例部署时把进程内任务表（`server/deps.py` 的 `JobStore`）换成 Redis
+- [ ] 细化 SSE 进度上报（当前内核 `agent.invoke()` 同步阻塞，进度只能按阶段上报）
