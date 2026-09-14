@@ -40,6 +40,14 @@ from evals.runner import (  # noqa: E402
 )
 
 
+def _configure_stdout() -> None:
+    """Windows 控制台可能是 GBK：遇到无法编码的字符时替换而不是直接崩溃。"""
+    try:
+        sys.stdout.reconfigure(errors="replace")  # type: ignore[union-attr]
+    except (AttributeError, ValueError):  # pragma: no cover - 非常规 stdout
+        pass
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python scripts/run_eval.py",
@@ -78,6 +86,7 @@ def _cmd_validate(cases) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _configure_stdout()
     args = build_parser().parse_args(argv)
 
     cases = load_cases()

@@ -116,8 +116,10 @@ class Text2SQLAgent:
         prompt_builder: SQLAgentPromptBuilder | None = None,
         llm: Any | None = None,
         session_store: SessionStore | None = None,
+        verbose: bool | None = None,
     ) -> None:
         self.llm = llm if llm is not None else get_llm_by_provider()
+        self.verbose = verbose
 
         # 先读取当前数据源元数据，动态限定 Agent 可使用的预置业务表
         self.metadata_json = metadata_json or get_metadata_json()
@@ -153,6 +155,7 @@ class Text2SQLAgent:
             llm=self.llm,
             db=self.db,
             prompt_builder=self.prompt_builder,
+            verbose=self.verbose,
         )
 
         logger.info(

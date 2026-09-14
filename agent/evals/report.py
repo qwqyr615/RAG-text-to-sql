@@ -127,11 +127,11 @@ def render_markdown(
                 if item is None:
                     marks.append("—")
                 elif item.result_match:
-                    marks.append("✅")
+                    marks.append("一致")
                 elif item.sql_ok:
-                    marks.append("⚠️ 结果不符")
+                    marks.append("结果不符")
                 else:
-                    marks.append("❌ 执行失败")
+                    marks.append("执行失败")
             lines.append(
                 f"| {case_id} | {question} | {category} | {seen} | "
                 + " | ".join(marks)

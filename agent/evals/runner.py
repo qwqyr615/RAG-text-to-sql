@@ -122,13 +122,17 @@ def build_prompt_builder(config: EvalConfig) -> SQLAgentPromptBuilder:
 
 
 def default_agent_factory(config: EvalConfig) -> Any:
-    """默认 Agent 工厂：真实 DeepSeek + 真实库，逐例独立会话。"""
+    """默认 Agent 工厂：真实 DeepSeek + 真实库，逐例独立会话。
+
+    ``verbose=False``：评测要的是干净的进度输出，不需要 LangChain 的中间步骤。
+    """
     from agents.text2sql_agent import Text2SQLAgent
     from sessions import InMemorySessionStore
 
     return Text2SQLAgent(
         prompt_builder=build_prompt_builder(config),
         session_store=InMemorySessionStore(max_turns=0),
+        verbose=False,
     )
 
 

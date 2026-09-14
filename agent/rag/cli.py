@@ -173,9 +173,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    _configure_stdout()
     parser = build_parser()
     args = parser.parse_args(argv)
     return int(args.func(args))
+
+
+def _configure_stdout() -> None:
+    """Windows 控制台可能是 GBK：遇到无法编码的字符时替换而不是直接崩溃。"""
+    try:
+        sys.stdout.reconfigure(errors="replace")  # type: ignore[union-attr]
+    except (AttributeError, ValueError):  # pragma: no cover - 非常规 stdout
+        pass
 
 
 if __name__ == "__main__":
