@@ -18,6 +18,8 @@ class AgentResult(BaseModel):
     """Agent 处理结果。"""
 
     question: str = Field(default="", description="原始问题")
+    session_id: str = Field(default="default", description="会话 ID")
+    turns_used: int = Field(default=0, description="本次注入的历史轮数，0 表示首轮")
     sql: Optional[str] = Field(default=None, description="生成的 SQL")
     columns: list[str] = Field(default_factory=list, description="结果列名")
     rows: list[list[Any]] = Field(default_factory=list, description="结果数据")

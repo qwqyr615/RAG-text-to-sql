@@ -6,7 +6,7 @@
 由 LangChain 自己完成：工具选择、SQL 生成、执行、错误重试、Agent 循环。
 这里不手动实现复杂 Agent 内容。
 
-本模块在官方 SQL Agent 之上补了三件事：
+本模块在官方 SQL Agent 之上补了四件事：
 
 1. **执行期只读守卫**：使用 ``ReadOnlySQLDatabase``（见 ``tools/sql_database.py``），
    模型生成的写操作在**真正执行前**被拦截，而不是只在事后回放取数时校验。违规会以
@@ -16,6 +16,8 @@
    各自持有字符预算，通过 system prompt 的 ``{context_block}`` 注入。
 3. **循环与工具预算**：``max_iterations`` / ``max_execution_time`` / ``top_k``
    全部由 ``core.config`` 控制。
+4. **多轮会话**：按 ``session_id`` 维护历史，以 ``chat_history`` 注入 Prompt，
+   支持「那 Night 班次呢」这类追问。
 
 为了向前端/上层返回结构化结果，本模块会从 Agent 的中间步骤中提取实际执行的 SQL，
 并使用只读执行器获取列名和数据行。
@@ -29,6 +31,7 @@ from typing import Any
 
 from langchain_community.agent_toolkits.sql.base import create_sql_agent
 from langchain_community.agent_toolkits.sql.prompt import SQL_FUNCTIONS_SUFFIX
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from agents.report_agent import ReportGenerator
@@ -39,11 +42,14 @@ from metadata.metadata_service import get_metadata_json
 from prompt.base import PromptContext
 from prompt.builder import PromptBuildResult, SQLAgentPromptBuilder
 from schemas.agent_io import AgentQuestion, AgentResult
+from sessions import ConversationTurn, SessionStore, build_session_store
 from tools.database import get_readonly_engine
 from tools.sql_database import ReadOnlySQLDatabase
 from tools.sql_executor import execute_sql
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_SESSION_ID = "default"
 
 
 def create_readonly_sql_agent(
@@ -62,6 +68,7 @@ def create_readonly_sql_agent(
 
     - system：``core.prompts.SQL_AGENT_SYSTEM_TEMPLATE``，含工作流约束与
       ``{context_block}``（每次请求动态填充）；
+    - chat_history：多轮历史（可选，由 ``sessions.SessionStore`` 提供）；
     - human：用户问题；
     - ai：LangChain 官方的 ``SQL_FUNCTIONS_SUFFIX``，保持工具调用行为不变；
     - agent_scratchpad：工具调用轨迹占位符（tool-calling Agent 必需）。
@@ -69,6 +76,7 @@ def create_readonly_sql_agent(
     prompt = ChatPromptTemplate.from_messages(
         [
             ("system", prompt_builder.system_template()),
+            MessagesPlaceholder(variable_name="chat_history", optional=True),
             ("human", "{input}"),
             ("ai", SQL_FUNCTIONS_SUFFIX),
             MessagesPlaceholder(variable_name="agent_scratchpad"),
@@ -106,8 +114,10 @@ class Text2SQLAgent:
         self,
         metadata_json: dict[str, Any] | None = None,
         prompt_builder: SQLAgentPromptBuilder | None = None,
+        llm: Any | None = None,
+        session_store: SessionStore | None = None,
     ) -> None:
-        self.llm = get_llm_by_provider()
+        self.llm = llm if llm is not None else get_llm_by_provider()
 
         # 先读取当前数据源元数据，动态限定 Agent 可使用的预置业务表
         self.metadata_json = metadata_json or get_metadata_json()
@@ -134,6 +144,11 @@ class Text2SQLAgent:
         # 四段 Prompt：元数据 / 指标 / 知识 / RAG 示例，各段自带预算
         self.prompt_builder = prompt_builder or SQLAgentPromptBuilder.from_settings()
 
+        # 多轮会话（SESSION_STORE=memory|file，SESSION_MAX_TURNS 控制轮数）
+        self.session_store = (
+            session_store if session_store is not None else build_session_store()
+        )
+
         self.agent = create_readonly_sql_agent(
             llm=self.llm,
             db=self.db,
@@ -142,13 +157,17 @@ class Text2SQLAgent:
 
         logger.info(
             "Text2SQLAgent 就绪：业务表 %s 张，Prompt 总预算 %s 字符，"
-            "工具循环上限 %s 次，执行时限 %s 秒",
+            "工具循环上限 %s 次，执行时限 %s 秒，会话轮数上限 %s",
             len(business_tables),
             settings.prompt_total_budget,
             settings.sql_agent_max_iterations,
             settings.sql_agent_max_execution_time,
+            self.session_store.max_turns,
         )
 
+    # ------------------------------------------------------------------
+    # 元数据 / Prompt 上下文
+    # ------------------------------------------------------------------
     @staticmethod
     def _get_available_columns(metadata_json: dict[str, Any]) -> list[str]:
         """从 metadata JSON 中获取当前业务表的所有可用字段名。"""
@@ -167,6 +186,44 @@ class Text2SQLAgent:
         )
         return self.prompt_builder.build_context(context)
 
+    # ------------------------------------------------------------------
+    # 多轮会话
+    # ------------------------------------------------------------------
+    def reset_session(self, session_id: str) -> None:
+        """清空指定会话的历史。"""
+        if self.session_store is not None:
+            self.session_store.clear(session_id)
+
+    def _history_messages(self, session_id: str) -> list[BaseMessage]:
+        """把会话历史转成 LangChain 消息（Human/AI 交替）。"""
+        if self.session_store is None:
+            return []
+        messages: list[BaseMessage] = []
+        for turn in self.session_store.load(session_id):
+            messages.append(HumanMessage(content=turn.question))
+            messages.append(AIMessage(content=turn.answer_text()))
+        return messages
+
+    def _remember(
+        self, session_id: str, question: str, result: AgentResult
+    ) -> None:
+        """把成功的一轮记入会话历史。"""
+        if self.session_store is None or not result.success:
+            return
+        if not (result.analysis_text or "").strip():
+            return
+        self.session_store.append(
+            session_id,
+            ConversationTurn(
+                question=question,
+                answer=result.analysis_text,
+                sql=result.sql,
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # 追问 / SQL 提取
+    # ------------------------------------------------------------------
     @staticmethod
     def _extract_sql_from_steps(intermediate_steps: list[Any] | None) -> str:
         """从 Agent 中间步骤中提取真正执行查询的 SQL。"""
@@ -204,12 +261,16 @@ class Text2SQLAgent:
 
         return str(tool_input or "").strip()
 
+    # ------------------------------------------------------------------
+    # 主入口
+    # ------------------------------------------------------------------
     def ask(self, question: AgentQuestion | str) -> AgentResult:
         """把用户问题交给 LangChain SQL Agent 处理，并返回结构化结果。"""
         if isinstance(question, str):
             question = AgentQuestion(question=question)
 
-        result = AgentResult(question=question.question)
+        session_id = question.session_id or DEFAULT_SESSION_ID
+        result = AgentResult(question=question.question, session_id=session_id)
 
         # 把可选的 metadata / business_rules 补充到当次问题中，
         # 这样既能使用官方 SQL Agent 自动读取表结构，也能额外传入业务上下文。
@@ -234,9 +295,17 @@ class Text2SQLAgent:
         )
         logger.info("Prompt 段用量：%s", build.summary())
 
+        # 多轮历史（关闭多轮时为空）
+        history = self._history_messages(session_id)
+        result.turns_used = len(history) // 2
+
         try:
             response = self.agent.invoke(
-                {"input": user_input, "context_block": build.context_block}
+                {
+                    "input": user_input,
+                    "context_block": build.context_block,
+                    "chat_history": history,
+                }
             )
         except Exception as exc:  # noqa: BLE001
             result.success = False
@@ -250,18 +319,17 @@ class Text2SQLAgent:
         else:
             result.analysis_text = str(response)
 
-        if not sql:
-            return result
-
         # SQL 已经由 Agent 通过只读守卫执行过一次；这里只读回放一次，拿到结构化
         # 结果（列名 + 数据行）供前端展示。回放失败不影响上面的分析结论。
-        result.sql = sql
-        try:
-            result.columns, result.rows = execute_sql(sql)
-        except Exception as exc:  # noqa: BLE001
-            result.sql_error = str(exc)
-            logger.warning("结果回放取数失败（分析结论已保留）：%s", exc)
+        if sql:
+            result.sql = sql
+            try:
+                result.columns, result.rows = execute_sql(sql)
+            except Exception as exc:  # noqa: BLE001
+                result.sql_error = str(exc)
+                logger.warning("结果回放取数失败（分析结论已保留）：%s", exc)
 
+        self._remember(session_id, question.question, result)
         return result
 
     def _safe_build_context(self, question: str) -> PromptBuildResult:

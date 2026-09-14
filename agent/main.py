@@ -5,6 +5,7 @@
 - 包含“报告”的问题：自动生成 Markdown 报告
 - 包含“异常/离群”的问题：Isolation Forest 异常检测
 - 包含“预测/回归”的问题：LinearRegression 简单回归建模
+- 多轮追问：同一会话内保留历史（输入 new 开启新会话）
 
 使用方式：
     1. 在 agent 目录下创建 .env（参考 .env.example），填入大模型配置。
@@ -13,6 +14,7 @@
 """
 
 from agents.enterprise_agent import EnterpriseAgent
+from sessions import new_session_id
 
 
 def print_result(result) -> None:
@@ -21,6 +23,9 @@ def print_result(result) -> None:
     if not result.success:
         print(f"错误: {result.error}")
         return
+
+    if result.turns_used:
+        print(f"（会话 {result.session_id}，本次注入了 {result.turns_used} 轮历史）")
 
     print(f"文字结论：\n{result.analysis_text}\n")
 
@@ -91,8 +96,10 @@ def print_model_result(res: dict) -> None:
 
 def main() -> None:
     agent = EnterpriseAgent()
+    session_id = new_session_id()
     print("企业数据底座智能问析 Agent 已启动。")
-    print("输入 exit / quit 退出。")
+    print(f"当前会话：{session_id}")
+    print("输入 new 开启新会话，输入 exit / quit 退出。")
 
     while True:
         try:
@@ -106,8 +113,13 @@ def main() -> None:
         if question.lower() in {"exit", "quit", "q"}:
             print("退出")
             break
+        if question.lower() in {"new", ":new", "新会话"}:
+            agent.reset_session(session_id)
+            session_id = new_session_id()
+            print(f"已开启新会话：{session_id}")
+            continue
 
-        response = agent.handle(question)
+        response = agent.handle(question, session_id=session_id)
 
         if response["type"] == "agent":
             print_result(response["result"])
