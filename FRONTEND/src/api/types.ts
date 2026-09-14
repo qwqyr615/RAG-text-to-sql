@@ -271,6 +271,20 @@ export interface ModelFeature {
   numeric: boolean
 }
 
+/** GET /modeling/features 的 data */
+export interface ModelingFeatures {
+  fields: ModelFeature[]
+  total: number
+  /** 建模模块实际查询的表（其他数据源的列不会出现在 fields 中） */
+  table: string
+  /** 后端在各算法下使用的默认特征集，前端可据此预选 */
+  default_features: {
+    anomaly: string[]
+    regression: string[]
+  }
+  note: string
+}
+
 export interface AnomalyRequest {
   features?: string[] | null
   contamination?: number

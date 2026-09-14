@@ -420,3 +420,115 @@ def test_chart_generation_survives_llm_failure():
     )
     assert chart is not None
     assert chart["source"] == "fallback"
+
+
+# ---------------------------------------------------------------------------
+# 建模字段白名单
+# ---------------------------------------------------------------------------
+def test_modeling_features_only_returns_modeling_table(monkeypatch):
+    """建模字段必须只来自建模模块真正查询的那张表。
+
+    回归测试：数据库里可能存在多个数据源（例如客户原始表 mes_prod_log 用
+    ``mot_t``/``def_rate`` 这类缩写列名），而 tools.modeling 只读一张表。
+    早期实现把所有表的列都返回给前端，用户选中不属于该表的列就会报
+    「特征列不存在」。这里锁定「只返回建模表字段」这一不变量。
+    """
+    import server.routes as routes
+    from tools.modeling import (
+        DEFAULT_ANOMALY_FEATURES,
+        DEFAULT_REGRESSION_FEATURES,
+        TABLE_NAME,
+    )
+
+    fact_columns = [
+        {"name": "defect_rate", "type": "DOUBLE", "description": "缺陷率"},
+        {"name": "downtime_minutes", "type": "DOUBLE", "description": "停机时长"},
+        {"name": "machine_id", "type": "VARCHAR(50)", "description": "设备编码"},
+    ]
+    other_columns = [
+        {"name": "brg_t", "type": "DOUBLE", "description": "轴承温度（客户缩写列名）"},
+        {"name": "def_rate", "type": "DOUBLE", "description": "缺陷率（客户缩写列名）"},
+    ]
+    fake_metadata = {
+        "tables": [
+            {"table_name": TABLE_NAME, "columns": fact_columns},
+            {"table_name": "mes_prod_log", "columns": other_columns},
+        ]
+    }
+
+    class FakeService:
+        def metadata(self):
+            return fake_metadata
+
+    monkeypatch.setattr(routes, "get_service", lambda: FakeService())
+
+    payload = routes.modeling_features(role="numeric")
+    assert payload["code"] == 1
+    data = payload["data"]
+
+    assert data["table"] == TABLE_NAME
+    names = {field["name"] for field in data["fields"]}
+
+    # 只包含建模表的数值列
+    assert "defect_rate" in names
+    assert "downtime_minutes" in names
+    # 非数值列被 role=numeric 过滤
+    assert "machine_id" not in names
+    # 其他数据源的列绝不能出现
+    assert "brg_t" not in names
+    assert "def_rate" not in names
+
+    # 默认特征集必须是「该表真实存在的列」的子集
+    defaults = data["default_features"]
+    assert set(defaults["anomaly"]) <= names
+    assert set(defaults["regression"]) <= names
+    assert set(defaults["anomaly"]) == {
+        name for name in DEFAULT_ANOMALY_FEATURES if name in names
+    }
+    assert set(defaults["regression"]) == {
+        name for name in DEFAULT_REGRESSION_FEATURES if name in names
+    }
+
+
+def test_modeling_features_all_role_includes_text_columns(monkeypatch):
+    """role 省略时应返回全部字段（含文本列），供前端展示字段说明。"""
+    import server.routes as routes
+    from tools.modeling import TABLE_NAME
+
+    fake_metadata = {
+        "tables": [
+            {
+                "table_name": TABLE_NAME,
+                "columns": [
+                    {"name": "defect_rate", "type": "DOUBLE", "description": "缺陷率"},
+                    {"name": "machine_id", "type": "VARCHAR(50)", "description": "设备编码"},
+                ],
+            }
+        ]
+    }
+
+    class FakeService:
+        def metadata(self):
+            return fake_metadata
+
+    monkeypatch.setattr(routes, "get_service", lambda: FakeService())
+
+    data = routes.modeling_features(role=None)["data"]
+    names = {field["name"] for field in data["fields"]}
+    assert names == {"defect_rate", "machine_id"}
+
+
+def test_modeling_features_handles_missing_table(monkeypatch):
+    """建模表不存在时返回空列表，而不是抛异常。"""
+    import server.routes as routes
+
+    class FakeService:
+        def metadata(self):
+            return {"tables": [{"table_name": "some_other_table", "columns": []}]}
+
+    monkeypatch.setattr(routes, "get_service", lambda: FakeService())
+
+    data = routes.modeling_features(role="numeric")["data"]
+    assert data["fields"] == []
+    assert data["total"] == 0
+    assert data["default_features"] == {"anomaly": [], "regression": []}

@@ -235,12 +235,8 @@ function KnowledgeGraphCanvas({
           return lines.join('<br/>')
         },
       },
-      legend: {
-        data: categories.map((category) => category.name),
-        top: 0,
-        textStyle: { color: colors.mutedSlate, fontFamily: fonts.body },
-        icon: 'circle',
-      },
+      // 不使用 ECharts 自带图例：页面下方已有与设计系统一致的自定义 HTML 图例，
+      // 两者并存会重复且打断图谱布局。
       animationDuration: 600,
       series: [
         {
@@ -254,6 +250,10 @@ function KnowledgeGraphCanvas({
             const links = degree[node.id] ?? 0
             // 未解析的指标用空心表示，视觉上提示「缺口」
             const dimmed = node.category === '指标口径' && node.resolved === false
+            // 核心层级（主题/对象/指标/表）始终显示标签，只有「字段」叶子节点
+            // 依赖 hover，否则 20+ 标签会糊在一起
+            const alwaysLabeled = node.category !== '字段'
+            const emphasized = node.category === '主题' || node.category === '业务对象'
             return {
               id: node.id,
               name: node.name,
@@ -269,11 +269,12 @@ function KnowledgeGraphCanvas({
               label: {
                 show: true,
                 position: 'right',
+                distance: 6,
                 fontSize: 11,
                 color: colors.nearBlack,
+                fontWeight: emphasized ? 500 : 400,
                 fontFamily: fonts.body,
-                // 只在连接度较高时默认显示标签，其余 hover 时显示
-                opacity: links >= 2 ? 1 : 0,
+                opacity: alwaysLabeled || links >= 3 ? 1 : 0,
                 formatter: node.name,
               },
               emphasis: { label: { show: true, opacity: 1 }, scale: 1.1 },

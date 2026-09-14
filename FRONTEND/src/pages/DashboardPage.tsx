@@ -80,7 +80,7 @@ export function DashboardPage() {
           <div className="eyebrow" style={{ marginBottom: 16 }}>
             ENTERPRISE DATA FOUNDATION · INTELLIGENT ANALYTICS
           </div>
-          <h1 className="display-secondary" style={{ maxWidth: 900, marginBottom: 18 }}>
+          <h1 className="display-secondary" style={{ maxWidth: 860, marginBottom: 18, textWrap: 'balance' }}>
             用自然语言，直接读懂企业数据底座
           </h1>
           <p
@@ -148,17 +148,20 @@ export function DashboardPage() {
             />
             <div className="grid grid-3">
               {tables.map((table) => (
-                <div className="card" key={table.table_name}>
-                  <div className="eyebrow" style={{ marginBottom: 8 }}>
-                    {table.role || 'TABLE'}
-                  </div>
+                <div className="card" key={table.table_name} style={{ display: 'flex', flexDirection: 'column' }}>
+                  {/* role 为 "other" 时没有信息量（发现模式的兜底分类），不展示 */}
+                  {table.role && table.role !== 'other' && (
+                    <div className="eyebrow" style={{ marginBottom: 8 }}>
+                      {table.role}
+                    </div>
+                  )}
                   <div className="mono" style={{ fontSize: 15, color: 'var(--c-black)', marginBottom: 8 }}>
                     {table.table_name}
                   </div>
-                  <p style={{ fontSize: 14, color: 'var(--c-muted-slate)', margin: '0 0 14px', lineHeight: 1.6 }}>
+                  <p style={{ fontSize: 14, color: 'var(--c-muted-slate)', margin: '0 0 14px', lineHeight: 1.6, flex: 1 }}>
                     {table.description || '暂无表说明'}
                   </p>
-                  <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
+                  <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
                     <span className="tag">{table.columns.length} 字段</span>
                     {table.row_count > 0 && (
                       <span className="tag">{table.row_count.toLocaleString('zh-CN')} 行</span>
@@ -181,7 +184,7 @@ export function DashboardPage() {
         />
         <div className="grid grid-3">
           {CAPABILITIES.map((item) => (
-            <div className="card" key={item.code} style={{ display: 'flex', flexDirection: 'column' }}>
+            <div className="card" key={item.code} style={{ display: 'flex', flexDirection: 'column', minHeight: 232 }}>
               <div className="eyebrow" style={{ marginBottom: 12 }}>
                 {item.code}
               </div>

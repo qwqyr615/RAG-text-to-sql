@@ -50,6 +50,7 @@ export function MetadataPage() {
   const fields = useMemo(() => {
     if (!activeTable) return []
     const keyword = fieldFilter.trim().toLowerCase()
+    // 样例值用与结果表格一致的格式化，避免 24.6579352875236 这类长浮点数撑破布局
     const rows = activeTable.columns.map((column) => [
       column.name,
       column.type,
@@ -58,7 +59,9 @@ export function MetadataPage() {
       column.description || '—',
       column.sample_value === null || column.sample_value === undefined
         ? '—'
-        : String(column.sample_value),
+        : typeof column.sample_value === 'number' && !Number.isInteger(column.sample_value)
+          ? String(Number(column.sample_value.toFixed(4)))
+          : String(column.sample_value),
     ])
     if (!keyword) return rows
     return rows.filter((row) =>

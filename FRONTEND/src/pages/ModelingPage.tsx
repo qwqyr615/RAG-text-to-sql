@@ -25,7 +25,7 @@ export function ModelingPage() {
   const [task, setTask] = useState<Task>('anomaly')
 
   const numericFields = features.data?.fields ?? []
-  /** 同名不同表的字段需要去重（本例中三张表结构相同，列名重复） */
+  /** 后端已按建模表过滤，同名不同表的重复问题不存在；仍做一次去重保护 */
   const uniqueNames = useMemo(
     () => Array.from(new Set(numericFields.map((field) => field.name))).sort(),
     [numericFields],
@@ -37,6 +37,13 @@ export function ModelingPage() {
         eyebrow="MACHINE LEARNING MODELING"
         title="机器建模"
         description="支持 Isolation Forest 异常检测与线性回归建模，包含训练、评估与结果解释。"
+        actions={
+          features.data?.table ? (
+            <span className="tag mono" title={features.data.note}>
+              建模数据表：{features.data.table}
+            </span>
+          ) : undefined
+        }
       />
 
       {features.loading && <Loading text="正在读取可用建模字段…" />}
@@ -67,9 +74,19 @@ export function ModelingPage() {
           </div>
 
           {task === 'anomaly' ? (
-            <AnomalyPanel available={uniqueNames} />
+            /* key 里带上默认特征集长度：异步加载完成后重新挂载，
+               使「预选默认特征」的初始 state 能正确生效 */
+            <AnomalyPanel
+              key={`anomaly-${features.data?.default_features?.anomaly?.length ?? 0}`}
+              available={uniqueNames}
+              defaultFeatures={features.data?.default_features?.anomaly ?? []}
+            />
           ) : (
-            <RegressionPanel available={uniqueNames} />
+            <RegressionPanel
+              key={`regression-${features.data?.default_features?.regression?.length ?? 0}`}
+              available={uniqueNames}
+              defaultFeatures={features.data?.default_features?.regression ?? []}
+            />
           )}
         </>
       )}
@@ -80,9 +97,16 @@ export function ModelingPage() {
 // ---------------------------------------------------------------------------
 // 异常检测
 // ---------------------------------------------------------------------------
-function AnomalyPanel({ available }: { available: string[] }) {
+function AnomalyPanel({
+  available,
+  defaultFeatures,
+}: {
+  available: string[]
+  defaultFeatures: string[]
+}) {
   const [contamination, setContamination] = useState(0.05)
-  const [selected, setSelected] = useState<string[]>([])
+  // 预选后端默认特征集：让用户一眼看到模型实际用了哪些字段，而不是空着
+  const [selected, setSelected] = useState<string[]>(defaultFeatures)
   const [result, setResult] = useState<AnomalyResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -277,9 +301,16 @@ function AnomalyPanel({ available }: { available: string[] }) {
 // ---------------------------------------------------------------------------
 // 回归建模
 // ---------------------------------------------------------------------------
-function RegressionPanel({ available }: { available: string[] }) {
+function RegressionPanel({
+  available,
+  defaultFeatures,
+}: {
+  available: string[]
+  defaultFeatures: string[]
+}) {
   const [target, setTarget] = useState('defect_rate')
-  const [selected, setSelected] = useState<string[]>([])
+  // 预选后端默认特征集：否则会默认选中 record_id 这类无意义字段，模型没有解释力
+  const [selected, setSelected] = useState<string[]>(defaultFeatures)
   const [result, setResult] = useState<RegressionResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)

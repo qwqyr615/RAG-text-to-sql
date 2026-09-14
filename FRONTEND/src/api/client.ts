@@ -23,7 +23,7 @@ import {
   type KnowledgeGraph,
   type KnowledgeOverview,
   type MetadataPayload,
-  type ModelFeature,
+  type ModelingFeatures,
   type RegressionRequest,
   type RegressionResult,
   type Relationship,
@@ -167,9 +167,7 @@ export const api = {
 
   /** 可用建模字段 */
   modelingFeatures: (role?: 'numeric') =>
-    get<{ fields: ModelFeature[]; total: number }>(
-      `/modeling/features${role ? `?role=${role}` : ''}`,
-    ),
+    get<ModelingFeatures>(`/modeling/features${role ? `?role=${role}` : ''}`),
 }
 
 // ---------------------------------------------------------------------------

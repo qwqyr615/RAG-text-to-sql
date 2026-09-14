@@ -331,11 +331,31 @@ def modeling_regression(request: RegressionRequest) -> dict[str, Any]:
 def modeling_features(
     role: Optional[str] = Query(default=None, description="过滤：numeric / all")
 ) -> dict[str, Any]:
-    """列出可用于建模的字段，供前端下拉选择。"""
+    """列出可用于建模的字段，供前端下拉选择。
+
+    只返回 ``tools.modeling`` 实际查询的那张表（默认 ``fact_production_record``）的字段。
+
+    这一点很关键：数据库里可能有多个数据源（例如客户原始表 ``mes_prod_log``
+    用的是 ``mot_t``/``def_rate`` 这类缩写列名），而建模模块只读一张表。
+    如果把所有表的列都列出来，用户选中一个不属于该表的列就会报
+    「特征列不存在」。因此这里按建模表过滤，并额外提供该模块的
+    ``default_features``，让前端可以合理地预选。
+    """
+    from tools.modeling import (
+        DEFAULT_ANOMALY_FEATURES,
+        DEFAULT_REGRESSION_FEATURES,
+        TABLE_NAME,
+    )
+
     metadata = get_service().metadata()
+    target_table = next(
+        (table for table in metadata.get("tables", []) if table["table_name"] == TABLE_NAME),
+        None,
+    )
+
     fields: list[dict[str, Any]] = []
-    for table in metadata.get("tables", []):
-        for column in table.get("columns", []):
+    if target_table is not None:
+        for column in target_table.get("columns", []):
             type_name = str(column.get("type", "")).upper()
             is_numeric = any(
                 token in type_name
@@ -345,11 +365,27 @@ def modeling_features(
                 continue
             fields.append(
                 {
-                    "table": table["table_name"],
+                    "table": target_table["table_name"],
                     "name": column["name"],
                     "type": type_name,
                     "description": column.get("description", ""),
                     "numeric": is_numeric,
                 }
             )
-    return ok({"fields": fields, "total": len(fields)})
+
+    available = {field["name"] for field in fields}
+    return ok(
+        {
+            "fields": fields,
+            "total": len(fields),
+            "table": TABLE_NAME,
+            "default_features": {
+                "anomaly": [name for name in DEFAULT_ANOMALY_FEATURES if name in available],
+                "regression": [name for name in DEFAULT_REGRESSION_FEATURES if name in available],
+            },
+            "note": (
+                f"建模模块只查询 {TABLE_NAME} 表；如需分析其他数据源，"
+                "请先在 mapping.yaml 中完成字段映射。"
+            ),
+        }
+    )
