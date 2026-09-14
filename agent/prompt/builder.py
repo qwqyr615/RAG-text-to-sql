@@ -98,7 +98,11 @@ class SQLAgentPromptBuilder:
 
     @classmethod
     def from_settings(cls) -> "SQLAgentPromptBuilder":
-        """按 ``.env`` / ``core.config`` 的配置装配默认四段。"""
+        """按 ``.env`` / ``core.config`` 的配置装配默认四段。
+
+        指标段与 RAG 段可以通过 ``PROMPT_METRICS_ENABLED`` / ``RAG_ENABLED`` 关闭，
+        这就是评测里 metrics_off / rag_off 两个消融配置的实现方式。
+        """
         return cls(
             providers=[
                 DataResourceProvider(
@@ -107,12 +111,16 @@ class SQLAgentPromptBuilder:
                     max_columns_per_table=settings.sql_max_columns_per_table,
                     sample_value_tables=settings.prompt_metadata_sample_tables,
                 ),
-                MetricsProvider(settings.prompt_metrics_budget),
+                MetricsProvider(
+                    settings.prompt_metrics_budget,
+                    enabled=settings.prompt_metrics_enabled,
+                ),
                 KnowledgeProvider(settings.prompt_knowledge_budget),
                 RagExampleProvider(
                     settings.prompt_rag_budget,
                     top_k=settings.rag_top_k,
                     min_score=settings.rag_min_score,
+                    enabled=settings.rag_enabled,
                 ),
             ],
             total_budget=settings.prompt_total_budget,

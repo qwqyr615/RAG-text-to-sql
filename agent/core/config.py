@@ -70,6 +70,18 @@ class Settings(BaseSettings):
     # 单张表最多展示多少个字段，其余提示模型用 sql_db_schema 查看
     sql_max_columns_per_table: int = 25
 
+    # ========== Prompt 段开关（消融实验与降级用）==========
+    # RAG 段是否启用：关掉即为评测里的 rag_off 配置
+    rag_enabled: bool = True
+    # 指标段是否启用：关掉即为评测里的 metrics_off 配置
+    prompt_metrics_enabled: bool = True
+
+    # ========== 多轮会话 ==========
+    # 单个会话保留多少轮历史（一问一答为一轮），0 表示关闭多轮
+    session_max_turns: int = 6
+    # 会话存储方式：memory（进程内）/ file（落盘到 agent/sessions/）
+    session_store: str = "memory"
+
     # ========== LangSmith 监控（可选）==========
     langsmith_tracing: bool = False
     langsmith_endpoint: str = ""
