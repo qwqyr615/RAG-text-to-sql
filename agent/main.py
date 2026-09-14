@@ -24,6 +24,23 @@ def print_result(result) -> None:
 
     print(f"文字结论：\n{result.analysis_text}\n")
 
+    if result.prompt_usage:
+        usage = result.prompt_usage
+        print("===== Prompt 段用量 =====")
+        print(
+            f"合计 {usage.get('used_chars', 0)}/{usage.get('total_budget', 0)} 字符"
+        )
+        for section in usage.get("sections", []):
+            line = f"  {section['name']}: {section['used_chars']}/{section['max_chars']}"
+            if section.get("dropped_items"):
+                line += f" 丢弃{section['dropped_items']}项"
+            if section.get("truncated"):
+                line += " 已截断"
+            if section.get("error"):
+                line += f" 失败({section['error']})"
+            print(line)
+        print()
+
     if result.rag_context:
         print("===== RAG 检索示例 =====")
         print(result.rag_context)
@@ -37,6 +54,11 @@ def print_result(result) -> None:
     if result.sql:
         print("===== 生成的 SQL =====")
         print(result.sql)
+        print()
+
+    if result.sql_error:
+        print("===== 取数失败（分析结论已保留）=====")
+        print(result.sql_error)
         print()
 
     if result.columns:

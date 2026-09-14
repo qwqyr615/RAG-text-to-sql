@@ -26,4 +26,11 @@ class AgentResult(BaseModel):
     rag_context: Optional[str] = Field(default=None, description="RAG检索上下文")
     report: Optional[str] = Field(default=None, description="生成的 Markdown 分析报告")
     error: Optional[str] = Field(default=None, description="错误信息")
+    sql_error: Optional[str] = Field(
+        default=None,
+        description="结果回放取数失败原因；不影响 analysis_text 已生成的分析结论",
+    )
+    prompt_usage: Optional[dict[str, Any]] = Field(
+        default=None, description="本次 Prompt 各段的预算使用情况"
+    )
     success: bool = Field(default=True, description="是否成功")
