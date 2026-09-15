@@ -25,19 +25,30 @@ MySQL + Milvus + DeepSeek
 ```powershell
 cd FRONTEND
 pnpm install
-pnpm dev          # http://127.0.0.1:5173
+pnpm dev          # 开发模式（热更新），http://127.0.0.1:5173
+```
+
+生产构建与预览：
+
+```powershell
+pnpm build        # tsc 类型检查 + vite 构建，输出 dist/
+pnpm serve        # 伺服 dist/（等同 pnpm preview），首屏更快
 ```
 
 > **启动顺序很重要**：先启动 FastAPI（`cd agent && python -m uvicorn server.main:app --port 8000`），
-> 再启动 Java 网关（`cd backend && mvn spring-boot:run`），最后才是前端。
+> 再启动 Java 网关（`cd backend && java -jar agent-server/target/agent-server.jar`），最后才是前端。
 > 若后端未就绪，页面顶部会直接给出可执行的排查提示，而不是白屏。
+> 仓库根目录的 `start-all.ps1` 会按此顺序一键启动并逐层等待就绪。
+
+> **`vite preview` 不会继承 `server.proxy`** —— 它需要 `vite.config.ts` 里单独声明的
+> `preview.proxy` 才能把 `/api` 转发到 Java 网关。该配置缺失时，预览模式下所有接口
+> 都返回 404，页面提示「无法连接后端服务」，与「后端真的没启动」表现完全一致，
+> 极易误判。已配置好，请勿删除。
 
 其他命令：
 
 ```powershell
 pnpm typecheck    # tsc --noEmit 类型检查
-pnpm build        # 生产构建（输出 dist/）
-pnpm preview      # 预览生产构建
 ```
 
 ## 页面与接口对应
@@ -48,7 +59,7 @@ pnpm preview      # 预览生产构建
 | 智能问答 | `/chat` | `POST /agent/ask/async`、`GET /agent/jobs/{id}`、`GET /agent/jobs/{id}/stream` |
 | 数据资源 | `/metadata` | `/metadata/tables`、`/metadata/relationships` |
 | 业务知识 | `/knowledge` | `/knowledge/overview`、`/knowledge/graph` |
-| 机器建模 | `/modeling` | `/modeling/features`、`POST /modeling/anomaly`、`POST /modeling/regression` |
+| 机器建模 | `/modeling` | `/modeling/features`、`/modeling/algorithms`、`POST /modeling/anomaly`、`POST /modeling/regression`、`POST /modeling/train` |
 | 分析报告 | `/report` | `POST /agent/report`（内部走异步任务链路） |
 
 ## 目录结构

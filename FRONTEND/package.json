@@ -6,6 +6,7 @@
   "description": "企业数据底座智能问析 Agent 系统 —— React 前端",
   "scripts": {
     "dev": "vite",
+    "serve": "vite preview",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"
