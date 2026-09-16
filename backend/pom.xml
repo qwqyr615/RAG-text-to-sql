@@ -54,7 +54,25 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
         <!-- 第三方依赖版本统一在此管理 -->
-        <lombok.version>1.18.30</lombok.version>
+        <!--
+          Lombok 版本不能低于 1.18.40。
+
+          为什么：IntelliJ 工程的 Project SDK 是 openjdk-25（见 .idea/misc.xml），
+          而 Lombok 1.18.30 只支持到 JDK 21。在 JDK 25 的 javac 上初始化时，
+          它反射 com.sun.tools.javac.code.TypeTag.UNKNOWN 会抛
+          NoSuchFieldException，包装成 ExceptionInInitializerError，
+          于是 IDE / 命令行编译都会直接失败：
+            java: java.lang.ExceptionInInitializerError
+            com.sun.tools.javac.code.TypeTag :: UNKNOWN
+          官方 changelog：JDK25 支持在 1.18.40 加入（1.18.42 又修了 JDK25 的
+          javadoc 解析问题），故取 1.18.42。
+
+          为什么不取更高的 1.18.44/1.18.46：本机有两个本地仓库，命令行离线构建
+          用 E:\develop\mvn_repo（只缓存到 1.18.42），IDEA 用
+          C:\Users\<user>\.m2\repository。1.18.42 是两个仓库都有的最高版本，
+          离线构建不会因缺构件失败。该版本已在 JDK 21 与 JDK 25 上验证通过。
+        -->
+        <lombok.version>1.18.42</lombok.version>
         <!--
           Apache HttpClient 5：Spring Framework 6 只支持 HttpClient 5
           （HttpComponentsClientHttpRequestFactory 构造器签名已改为
