@@ -159,7 +159,12 @@ if (Test-Port 8080) {
     Write-Warn2 '8080 已被占用，跳过启动'
 }
 else {
-    Start-Process -FilePath $JavaExe -ArgumentList @('-jar', $jar) `
+    # 注意：Start-Process 的 -ArgumentList 只是把数组用空格拼成命令行，不会自动加引号。
+    # $jar 是含空格的路径时（例如仓库目录叫「企业数据底座智能问析 Agent 系统」），
+    # 必须手动加引号，否则 java 收到被空格截断的路径后立刻退出，
+    # 脚本会白等 120 秒再报「Java 网关启动失败」，看起来就像卡在 java 层：
+    #   Error: Unable to access jarfile E:\code\Agent\企业数据底座智能问析
+    Start-Process -FilePath $JavaExe -ArgumentList @('-jar', "`"$jar`"") `
         -WorkingDirectory (Join-Path $Root 'backend\agent-server') -WindowStyle Minimized
     Write-Host '  已在新窗口启动 Java 网关（约 5 秒）'
 }
