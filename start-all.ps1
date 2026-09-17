@@ -63,6 +63,24 @@ function Wait-Http($url, $name, $timeoutSec) {
     return $false
 }
 
+# 按 UTF-8 解码上游返回的 JSON。
+#
+# 背景：FastAPI 的响应头是 application/json 且不带 charset，而 Windows PowerShell 5.1
+# 在这种情况下会把响应体按 ISO-8859-1 解码，于是上游的中文全变乱码
+# （"生产记录" -> "çæäº§è®°å½•"，即 UTF-8 字节被逐个当成 Latin-1 字符）。
+# 脚本自身的中文是正常的，控制台编码也没问题，问题只出在这一次解码上，
+# 所以这里自己取原始字节再按 UTF-8 解码。
+function Get-JsonUtf8($url, $timeoutSec = 10) {
+    $response = Invoke-WebRequest -Uri $url -TimeoutSec $timeoutSec -UseBasicParsing
+    $bytes = $null
+    try { $bytes = $response.RawContentStream.ToArray() } catch { }
+    if ($bytes -and $bytes.Length -gt 0) {
+        return ([System.Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json)
+    }
+    # 兜底：PowerShell 7 的 .Content 本身就是按 UTF-8 解码的
+    return ($response.Content | ConvertFrom-Json)
+}
+
 Write-Host ''
 Write-Host '==========================================================' -ForegroundColor White
 Write-Host '  企业数据底座智能问析 Agent 系统' -ForegroundColor White
@@ -133,7 +151,7 @@ if (-not (Wait-Http 'http://127.0.0.1:8000/api/v1/system/health' 'FastAPI' 240))
     Write-Err 'FastAPI 启动失败。请查看刚弹出的窗口里的错误信息。'
     exit 1
 }
-$health = Invoke-RestMethod -Uri 'http://127.0.0.1:8000/api/v1/system/health' -TimeoutSec 10
+$health = Get-JsonUtf8 -url 'http://127.0.0.1:8000/api/v1/system/health' -timeoutSec 10
 if ($health.data.agent_ready) {
     Write-Host ("  数据库={0}  业务表={1} 张  模型={2}  RAG={3}" -f `
             $health.data.database_type, $health.data.table_count, $health.data.llm_model, $health.data.rag_enabled)
